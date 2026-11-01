@@ -140,9 +140,16 @@ h1 {
   letter-spacing: .02em;
 }
 .masthead .sub b { color: var(--accent); font-weight: 600; }
-/* GitHub 仓库入口：页眉右侧 */
-.ghlink {
+/* 页眉右侧入口：GitHub 源码 + 高清原卷下载 */
+.headlinks {
   margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ghlink,
+.hdlink {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -155,12 +162,21 @@ h1 {
   font-size: 12px;
   line-height: 1;
   letter-spacing: .02em;
+  white-space: nowrap;
   text-decoration: none;
   transition: color .2s, border-color .2s, background .2s;
 }
 .ghlink:hover { color: var(--ink); border-color: var(--ink); background: var(--mask); }
-.ghlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ghlink svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.hdlink {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.hdlink:hover { color: var(--accent-ink); filter: brightness(1.07); }
+.ghlink:focus-visible,
+.hdlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ghlink svg,
+.hdlink svg { width: 15px; height: 15px; flex: 0 0 auto; }
 
 /* ── 吸顶导航 ────────────────────────── */
 .navwrap {
@@ -928,8 +944,10 @@ footer .mono { font-family: var(--mono); }
   body { font-size: 14px; }
   .opts { grid-template-columns: 1fr; }
   .masthead { gap: 12px; }
-  .ghlink { padding: 7px 8px; }
-  .ghlink span { display: none; }
+  .masthead h1 { font-size: 25px; }
+  .headlinks { gap: 6px; }
+  .ghlink, .hdlink { padding: 7px 8px; }
+  .ghlink span, .hdlink span { display: none; }
   .seal { width: 44px; height: 44px; font-size: 23px; }
   .qcard { padding: 14px 14px 12px; }
   .qtext { font-size: 14px; }
@@ -939,7 +957,7 @@ footer .mono { font-family: var(--mono); }
   .supp-table th, .supp-table td { padding: 6px 7px; }
 }
 @media print {
-  .navwrap, .pdfbtns, .filters, .ansbtn, .minilink, .ghlink, footer { display: none !important; }
+  .navwrap, .pdfbtns, .filters, .ansbtn, .minilink, .headlinks, footer { display: none !important; }
   body { padding: 0; background: #fff; }
   .qcard, .card { box-shadow: none; break-inside: avoid; }
   .ansbox { display: block !important; }
@@ -1024,10 +1042,16 @@ html[data-loading="true"] #app::after {
       <h1>考研数学真题速查</h1>
       <p class="sub">数一 · 数二 · 数三 ｜ 逐题 LaTeX 还原 · 难度星级 · 考点标注 ｜ <b>已上线 2010—2011</b></p>
     </div>
-    <a class="ghlink" href="https://github.com/3456038583-gif/kaoyan-math-site" target="_blank" rel="noopener noreferrer" title="在 GitHub 上查看项目源码" aria-label="在 GitHub 上查看项目源码">
-      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-      <span>GitHub</span>
-    </a>
+    <div class="headlinks">
+      <a class="ghlink" href="https://github.com/3456038583-gif/kaoyan-math-site" target="_blank" rel="noopener noreferrer" title="在 GitHub 上查看项目源码" aria-label="在 GitHub 上查看项目源码">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="hdlink" href="https://github.com/3456038583-gif/kaoyan-math-site-hd" target="_blank" rel="noopener noreferrer" title="下载 2010—2026 高清未压缩原卷 PDF（GitHub 仓库）" aria-label="下载高清未压缩原卷 PDF">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8"/><path d="M4.8 7.2 8 10.4l3.2-3.2"/><path d="M2.5 12.5h11"/></svg>
+        <span>高清原卷</span>
+      </a>
+    </div>
   </header>
 
   <div class="navwrap">
