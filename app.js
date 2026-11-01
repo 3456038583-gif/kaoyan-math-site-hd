@@ -911,3 +911,19 @@
   render();
   if (hash) jumpTo(Number(hash[1]), Number(hash[2]), Number(hash[3]));
 })();
+
+/* 页脚 Star 计数：离线或接口失败时只显示「给个 Star」 */
+(function () {
+  const el = document.getElementById('starCount');
+  if (!el || typeof fetch !== 'function') return;
+  fetch('https://api.github.com/repos/3456038583-gif/kaoyan-math-site', {
+    headers: { Accept: 'application/vnd.github+json' }
+  })
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => {
+      if (!d || typeof d.stargazers_count !== 'number') return;
+      el.textContent = d.stargazers_count;
+      el.hidden = false;
+    })
+    .catch(() => {});
+})();

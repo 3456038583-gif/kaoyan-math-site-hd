@@ -149,7 +149,8 @@ h1 {
   gap: 8px;
 }
 .ghlink,
-.hdlink {
+.hdlink,
+.dllink {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -166,7 +167,8 @@ h1 {
   text-decoration: none;
   transition: color .2s, border-color .2s, background .2s;
 }
-.ghlink:hover { color: var(--ink); border-color: var(--ink); background: var(--mask); }
+.ghlink:hover,
+.dllink:hover { color: var(--ink); border-color: var(--ink); background: var(--mask); }
 .hdlink {
   border-color: transparent;
   background: var(--accent);
@@ -174,9 +176,11 @@ h1 {
 }
 .hdlink:hover { color: var(--accent-ink); filter: brightness(1.07); }
 .ghlink:focus-visible,
-.hdlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hdlink:focus-visible,
+.dllink:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ghlink svg,
-.hdlink svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.hdlink svg,
+.dllink svg { width: 15px; height: 15px; flex: 0 0 auto; }
 
 /* ── 吸顶导航 ────────────────────────── */
 .navwrap {
@@ -892,6 +896,44 @@ footer {
   flex-wrap: wrap;
 }
 footer .mono { font-family: var(--mono); }
+/* 页脚入口：打包下载 + 点 Star */
+.footcta {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ctbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1;
+  letter-spacing: .02em;
+  text-decoration: none;
+  transition: border-color .2s, background .2s, color .2s;
+}
+.ctbtn:hover { border-color: var(--line-strong); background: var(--mask); }
+.ctbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctbtn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.ctbtn--star { border-color: var(--line-strong); }
+.ctbtn--star:hover { border-color: var(--gold); color: var(--gold); }
+.ctbtn--star:hover .starn { color: var(--gold); }
+.starn {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: var(--mask);
+}
 
 @media (max-width: 720px) {
   .scorecell { padding: 10px 11px; }
@@ -943,11 +985,21 @@ footer .mono { font-family: var(--mono); }
 @media (max-width: 520px) {
   body { font-size: 14px; }
   .opts { grid-template-columns: 1fr; }
-  .masthead { gap: 12px; }
+  .masthead {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "seal title" "links links";
+    gap: 12px;
+    align-items: center;
+  }
+  .seal { grid-area: seal; }
+  .masthead > div:nth-child(2) { grid-area: title; min-width: 0; }
   .masthead h1 { font-size: 25px; }
-  .headlinks { gap: 6px; }
-  .ghlink, .hdlink { padding: 7px 8px; }
-  .ghlink span, .hdlink span { display: none; }
+  .headlinks { grid-area: links; margin-left: 0; gap: 6px; width: 100%; justify-content: flex-end; }
+  .ghlink, .hdlink, .dllink { padding: 7px 8px; }
+  .ghlink span, .hdlink span, .dllink span { display: none; }
+  .footcta { flex-direction: column; align-items: stretch; }
+  .ctbtn { justify-content: center; }
   .seal { width: 44px; height: 44px; font-size: 23px; }
   .qcard { padding: 14px 14px 12px; }
   .qtext { font-size: 14px; }
@@ -1051,6 +1103,10 @@ html[data-loading="true"] #app::after {
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8"/><path d="M4.8 7.2 8 10.4l3.2-3.2"/><path d="M2.5 12.5h11"/></svg>
         <span>高清原卷</span>
       </a>
+      <a class="dllink" href="https://github.com/3456038583-gif/kaoyan-math-site-hd/releases/latest" target="_blank" rel="noopener noreferrer" title="打包下载历年真题、解析与真题评价（试卷 / 解析 / 真题评价 三个压缩包）" aria-label="打包下载历年真题、解析与真题评价">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.7 14 4.9v6.2L8 14.3 2 11.1V4.9z"/><path d="M2 4.9 8 8.1l6-3.2"/><path d="M8 8.1v6.2"/></svg>
+        <span>打包下载</span>
+      </a>
     </div>
   </header>
 
@@ -1078,6 +1134,17 @@ html[data-loading="true"] #app::after {
   <main id="app"></main>
 
   <footer>
+    <div class="footcta">
+      <a class="ctbtn" href="https://github.com/3456038583-gif/kaoyan-math-site-hd/releases/latest" target="_blank" rel="noopener noreferrer">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.7 14 4.9v6.2L8 14.3 2 11.1V4.9z"/><path d="M2 4.9 8 8.1l6-3.2"/><path d="M8 8.1v6.2"/></svg>
+        <span>打包下载 · 真题 / 解析 / 真题评价</span>
+      </a>
+      <a class="ctbtn ctbtn--star" href="https://github.com/3456038583-gif/kaoyan-math-site" target="_blank" rel="noopener noreferrer" title="在 GitHub 上给这个项目点个 Star">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.3l1.98 4.01 4.42.64-3.2 3.12.76 4.4L8 11.4l-3.96 2.07.76-4.4-3.2-3.12 4.42-.64z"/></svg>
+        <span>给个 Star</span>
+        <span class="starn" id="starCount" hidden></span>
+      </a>
+    </div>
     <span>内容整理自「小崔说数」真题资料 · 仅作个人复习使用</span>
     <span class="mono" id="footStat"></span>
   </footer>
