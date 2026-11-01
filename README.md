@@ -30,13 +30,17 @@ pdfs/supplement/  补充题（数一补充试卷；解析见下方 Release）
 figs/             题目配图
 ```
 
-## 补充题解析（单独放在 Release）
+## 打包下载（Release）
 
-`pdfs/supplement/m1-supplement-sol.pdf` 有 **140 MB / 335 页**，超过 GitHub 单文件 100 MB 的硬性上限，因此没有放进仓库，而是作为 Release 附件提供：
+不想 clone 整个仓库的话，可以直接从 Release 下载打包好的 PDF：
 
 <https://github.com/3456038583-gif/kaoyan-math-site-hd/releases/latest>
 
-下载后放进 `pdfs/supplement/` 目录即可，网页里的链接会自动生效。
+- `kaoyan-math-papers-2010-2026.zip`（历年真题 · 试卷）—— 17 年三科真题试卷，约 190 MB
+- `kaoyan-math-solutions-2010-2026.zip`（历年真题 · 解析）—— 17 年三科真题解析，约 645 MB
+- `kaoyan-math-reviews-2010-2026.zip`（真题评价）—— 17 套「真题评价 & 重点题」PDF，约 41 MB
+
+另外，`pdfs/supplement/m1-supplement-sol.pdf` 有 **140 MB / 335 页**，超过 GitHub 单文件 100 MB 的硬性上限，没有放进仓库，也在 Release 里单独放了一份（解析压缩包里已经包含）。下载后放进 `pdfs/supplement/` 目录即可，网页里的链接会自动生效。
 
 ## 本地运行
 
