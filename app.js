@@ -52,7 +52,8 @@
         const subject = Number(m[2]);
         if (!ALL_YEARS.includes(year)) continue;
         const qCount = year >= 2021 ? 22 : 23;
-        const clean = { sel: {}, big: {} };
+        // touched=false 表示这份卷子的分数只是同题自动同步过来的，用户还没在这里记录过
+        const clean = { sel: {}, big: {}, touched: rec.touched !== false };
         if (rec.sel && typeof rec.sel === 'object') {
           for (const [n, v] of Object.entries(rec.sel)) {
             const qn = Number(n);
@@ -77,9 +78,11 @@
   })();
 
   const scoreRec = (year, subject) => SCORES[paperKey(year, subject)] || null;
-  const ensureScoreRec = (year, subject) => {
+  // touched 默认 true：用户在这份卷子上直接改分；同题自动同步写入时传 false
+  const ensureScoreRec = (year, subject, touched = true) => {
     const k = paperKey(year, subject);
-    if (!SCORES[k]) SCORES[k] = { sel: {}, big: {} };
+    if (!SCORES[k]) SCORES[k] = { sel: {}, big: {}, touched: touched !== false };
+    else if (touched !== false) SCORES[k].touched = true;
     return SCORES[k];
   };
   const pruneScoreRec = (year, subject) => {
@@ -242,6 +245,58 @@
     return parts.length ? ` · 同题 ${parts.join('、')}` : '';
   }
 
+  // 同题成绩始终共用一个值：任何一科改了，其他科目的同一道题跟着改
+  function sameQuestionTargets(year, subject, n) {
+    const q = getQ(year, subject, n);
+    if (!q) return [];
+    const isBig = qKind(year, n) === 'big';
+    return otherSameQuestions(year, subject, q)
+      .filter(o => (qKind(year, o.q.n) === 'big') === isBig)
+      .map(o => ({ subject: o.subject, n: o.q.n }));
+  }
+
+  // value 为 undefined 表示取消标记 / 清空该题
+  function propagateScore(year, subject, n, value, onlyMissing) {
+    let changed = 0;
+    for (const t of sameQuestionTargets(year, subject, n)) {
+      const rec = scoreRec(year, t.subject);
+      const isBig = qKind(year, n) === 'big';
+      const cur = rec ? (isBig ? rec.big[t.n] : rec.sel[t.n]) : undefined;
+      if (cur === value) continue;
+      if (onlyMissing && cur !== undefined) continue;
+      if (value === undefined) {
+        if (cur === undefined) continue;
+        if (isBig) delete rec.big[t.n]; else delete rec.sel[t.n];
+      } else {
+        const target = ensureScoreRec(year, t.subject, false);
+        if (isBig) target.big[t.n] = Math.min(qMax(year, t.n), Math.max(0, value));
+        else target.sel[t.n] = value;
+      }
+      pruneScoreRec(year, t.subject);
+      changed++;
+    }
+    return changed;
+  }
+
+  // 打开页面时补全旧记录里只在一科记过、另一科还空着的同题
+  function reconcileLoadedScores() {
+    let changed = 0;
+    for (const year of LOADED_YEARS) {
+      for (const subject of [1, 2, 3]) {
+        const rec = scoreRec(year, subject);
+        if (!rec) continue;
+        for (const [n, val] of Object.entries(rec.sel)) {
+          changed += propagateScore(year, subject, Number(n), val, true);
+        }
+        for (const [n, val] of Object.entries(rec.big)) {
+          changed += propagateScore(year, subject, Number(n), val, true);
+        }
+      }
+    }
+    if (changed) saveScores();
+    return changed;
+  }
+
   function syncSameScores(year, subject) {
     let count = 0;
     const bySource = { 1: 0, 2: 0, 3: 0 };
@@ -397,9 +452,9 @@
         <p class="scsum">已填 <b data-score-set="big">${c.big.set}</b> / ${c.big.count} 题 · 大题 <b data-score-sum="big">${fmtScore(c.big.score)}</b> / ${c.big.max}</p>
       </div>
       <div class="scorefoot">
-        <span>点题号标记做对，再点一次标记做错；未标记／未填写的题目按 0 分计。</span>
+        <span>点题号标记做对，再点一次标记做错；同题分数会自动同步到其他科目。未标记／未填写的题目按 0 分计。</span>
         <div class="scorefoot-btns">
-          <button class="minibtn" type="button" data-score-sync>同步同题分数</button>
+          <button class="minibtn" type="button" data-score-sync title="同题已自动同步；这个按钮用于补齐以前留下的旧记录">补齐同题分数</button>
           <button class="minibtn danger" type="button" data-score-reset>清空本卷成绩</button>
         </div>
         <span class="scorestatus" data-score-status></span>
@@ -454,14 +509,23 @@
     const originBtn = opts.origin
       ? `<button class="minilink" type="button" data-jump="${year},${subject},${q.n}">原卷定位</button>`
       : '';
-    // 同一道题在多个卷子里出现时，列出考过它的卷子与题号
-    const alsoInHTML = opts.alsoIn && opts.alsoIn.length > 1
-      ? `<div class="alsoin"><span class="lab">同题</span>${opts.alsoIn.map(([s, n]) =>
-          `<span class="chip mod-tag">${SUBJ[s]} 第 ${n} 题</span>`).join('')}</div>`
+    // 同一道题在同年多个卷子里出现时，在题号旁标出各卷的题号（如 数一3、数二2、数三4）
+    const seenSame = new Set();
+    const sameList = [[subject, q.n], ...otherSameQuestions(year, subject, q).map(o => [o.subject, o.q.n])]
+      .filter(([s, n]) => {
+        const k = `${s}-${n}`;
+        if (seenSame.has(k)) return false;
+        seenSame.add(k);
+        return true;
+      })
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const sameTagHTML = sameList.length > 1
+      ? `<span class="same-tag" title="同年同题：${sameList.map(([s, n]) => `${SUBJ[s]}第 ${n} 题`).join('，')}">同题 ${sameList.map(([s, n]) => `${shortSubj(s)}${n}`).join(' · ')}</span>`
       : '';
     return `<article class="qcard${key ? ' is-key' : ''}" id="q-${year}-${subject}-${q.n}" data-lv="${lv}"${key ? ' data-key="1"' : ''}>
       <div class="qhead">
         <span class="qnum">${q.n}</span>
+        ${sameTagHTML}
         <span class="chip ${LV_CLASS[lv]}">${lv}</span>
         ${opts.showSubject ? `<span class="chip mod-tag">${SUBJ[subject]}</span>` : ''}
         <span class="chip mod-tag">${q.m}</span>
@@ -469,7 +533,6 @@
         <span class="qmeta">考点：<b>${safe(q.t)}</b></span>
         ${stars(q.st)}
       </div>
-      ${alsoInHTML}
       <div class="qtext">${safe(q.x)}</div>
       ${options}
       <div class="qfoot">
@@ -834,16 +897,16 @@
 
   function statsCounts() {
     const counts = { 1: 0, 2: 0, 3: 0 };
-    for (const k of Object.keys(SCORES)) {
+    for (const [k, rec] of Object.entries(SCORES)) {
       const s = Number(k.split('-')[1]);
-      if (counts[s] !== undefined) counts[s]++;
+      if (counts[s] !== undefined && rec.touched !== false) counts[s]++;
     }
     return counts;
   }
 
   function statsRows(subject) {
     return ALL_YEARS
-      .filter(y => LOADED_YEARS.has(y) && scoreRec(y, subject))
+      .filter(y => LOADED_YEARS.has(y) && scoreRec(y, subject) && scoreRec(y, subject).touched !== false)
       .map(y => computePaperScore(y, subject))
       .filter(r => r.hasAny)
       .sort((a, b) => b.year - a.year);
@@ -1322,6 +1385,7 @@
       history.replaceState(null, '', `?${qs}`);
     } catch (e) { /* file:// 下部分浏览器不允许改写地址 */ }
 
+    reconcileLoadedScores();
     const cacheKey = cacheKeyOf();
     const cachedNodes = VIEW_CACHE.get(cacheKey);
     if (cachedNodes) {
@@ -1419,9 +1483,11 @@
       if (cur === 1) rec.sel[n] = 0;
       else if (cur === 0) delete rec.sel[n];
       else rec.sel[n] = 1;
+      const synced = propagateScore(year, subject, n, rec.sel[n], false);
       pruneScoreRec(year, subject);
       saveScores();
-      repaintScorecard(card, year, subject);
+      const fresh = repaintScorecard(card, year, subject);
+      if (synced) setScoreStatus(fresh, `第 ${n} 题已自动同步到 ${synced} 道同题。`);
       return;
     }
 
@@ -1432,12 +1498,15 @@
       const year = Number(card.dataset.year);
       const subject = Number(card.dataset.subject);
       const rec = ensureScoreRec(year, subject);
+      let synced = 0;
       for (const q of (PAPERS[paperKey(year, subject)] || [])) {
-        if (qKind(year, q.n) !== 'big') rec.sel[q.n] = 1;
+        if (qKind(year, q.n) === 'big') continue;
+        rec.sel[q.n] = 1;
+        synced += propagateScore(year, subject, q.n, 1, false);
       }
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
-      setScoreStatus(fresh, '已全选选填；点做错的题号可改为做错，再点一次取消标记。');
+      setScoreStatus(fresh, `已全选选填${synced ? `，并同步 ${synced} 道同题` : ''}；点做错的题号可改为做错。`);
       return;
     }
 
@@ -1448,10 +1517,15 @@
       const year = Number(card.dataset.year);
       const subject = Number(card.dataset.subject);
       const rec = ensureScoreRec(year, subject);
+      let synced = 0;
+      for (const n of Object.keys(rec.sel).map(Number)) {
+        synced += propagateScore(year, subject, n, undefined, false);
+      }
       rec.sel = {};
       pruneScoreRec(year, subject);
       saveScores();
-      repaintScorecard(card, year, subject);
+      const fresh = repaintScorecard(card, year, subject);
+      if (synced) setScoreStatus(fresh, `已清空选填，并同步清除 ${synced} 道同题记录。`);
       return;
     }
 
@@ -1467,9 +1541,10 @@
       if (val === undefined) return;
       const rec = ensureScoreRec(year, subject);
       rec.big[tgtN] = Math.min(qMax(year, tgtN), Math.max(0, val));
+      const synced = propagateScore(year, subject, tgtN, rec.big[tgtN], false);
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
-      setScoreStatus(fresh, `已从 ${SUBJ[srcSubject]} 第 ${srcN} 题复制 ${fmtScore(val)} 分。`);
+      setScoreStatus(fresh, `已从 ${SUBJ[srcSubject]} 第 ${srcN} 题复制 ${fmtScore(rec.big[tgtN])} 分${synced ? `，并同步 ${synced} 道同题` : ''}。`);
       return;
     }
 
@@ -1493,12 +1568,18 @@
       if (!card) return;
       const year = Number(card.dataset.year);
       const subject = Number(card.dataset.subject);
-      if (!scoreRec(year, subject)) return;
-      if (!window.confirm(`清空 ${year} 年${SUBJ[subject]}的记录？此操作不可撤销。`)) return;
+      const rec = scoreRec(year, subject);
+      if (!rec) return;
+      if (!window.confirm(`清空 ${year} 年${SUBJ[subject]}的记录？其他科目的同题记录也会一并清除。`)) return;
+      const selNs = Object.keys(rec.sel).map(Number);
+      const bigNs = Object.keys(rec.big).map(Number);
       delete SCORES[paperKey(year, subject)];
+      let synced = 0;
+      for (const n of selNs) synced += propagateScore(year, subject, n, undefined, false);
+      for (const n of bigNs) synced += propagateScore(year, subject, n, undefined, false);
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
-      setScoreStatus(fresh, '已清空本卷成绩。');
+      setScoreStatus(fresh, `已清空本卷成绩${synced ? `，并同步清除 ${synced} 道同题记录` : ''}。`);
       return;
     }
 
@@ -1630,9 +1711,11 @@
       rec.big[n] = clamped;
       if (clamped !== v) inp.value = fmtScore(clamped);
     }
+    const synced = propagateScore(year, subject, n, rec.big[n], false);
     pruneScoreRec(year, subject);
     saveScores();
     updateScoreSums(card, year, subject);
+    if (synced) setScoreStatus(card, `第 ${n} 题已自动同步到 ${synced} 道同题。`);
   });
 
   // 失焦时把越界或只写了一半的数字回填成实际存下的分数
