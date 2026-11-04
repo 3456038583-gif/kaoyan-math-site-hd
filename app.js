@@ -435,7 +435,7 @@
           <h4>选择 · 填空</h4>
           <span class="scblock-meta">选择 ${c.choice.max} 分 · 填空 ${c.fill.max} 分 · 选填 ${c.sel.max} 分</span>
           <div class="scbtns">
-            <button class="minibtn" type="button" data-score-all>全选选填</button>
+            <button class="minibtn" type="button" data-score-all title="只把尚未标记的选填标为做对，已有记录保持不变">全选选填</button>
             <button class="minibtn" type="button" data-score-clear-sel>清空选填</button>
           </div>
         </div>
@@ -448,14 +448,14 @@
           <h4>解答题</h4>
           <span class="scblock-meta">${bigQs.length} 题 · ${c.big.max} 分</span>
           <div class="scbtns">
-            <button class="minibtn" type="button" data-score-all-big title="把所有解答题填成满分，之后仍可逐题修改">大题全满分</button>
+            <button class="minibtn" type="button" data-score-all-big title="只把尚未填写的大题补成满分，已有分数保持不变">大题全满分</button>
           </div>
         </div>
         <div class="bigrows">${bigRows}</div>
         <p class="scsum">已填 <b data-score-set="big">${c.big.set}</b> / ${c.big.count} 题 · 大题 <b data-score-sum="big">${fmtScore(c.big.score)}</b> / ${c.big.max}</p>
       </div>
       <div class="scorefoot">
-        <span>点题号标记做对，再点一次标记做错；同题分数会自动同步到其他科目。未标记／未填写的题目按 0 分计。</span>
+        <span>点题号标记做对，再点一次标记做错；同题分数会自动同步到其他科目。「全选」和「大题全满分」只补齐未记录的部分，不会覆盖已填分数。未标记／未填写的题目按 0 分计。</span>
         <div class="scorefoot-btns">
           <button class="minibtn" type="button" data-score-sync title="同题已自动同步；这个按钮用于补齐以前留下的旧记录">补齐同题分数</button>
           <button class="minibtn danger" type="button" data-score-reset>清空本卷成绩</button>
@@ -1501,15 +1501,22 @@
       const year = Number(card.dataset.year);
       const subject = Number(card.dataset.subject);
       const rec = ensureScoreRec(year, subject);
+      let filled = 0;
+      let kept = 0;
       let synced = 0;
+      // 只补齐还没标记的题，已经记过的（包括从同题同步来的）保持原样
       for (const q of (PAPERS[paperKey(year, subject)] || [])) {
         if (qKind(year, q.n) === 'big') continue;
+        if (rec.sel[q.n] !== undefined) { kept++; continue; }
         rec.sel[q.n] = 1;
+        filled++;
         synced += propagateScore(year, subject, q.n, 1, false);
       }
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
-      setScoreStatus(fresh, `已全选选填${synced ? `，并同步 ${synced} 道同题` : ''}；点做错的题号可改为做错。`);
+      setScoreStatus(fresh, filled
+        ? `已补齐 ${filled} 道未标记的选填为做对，保留 ${kept} 道已有记录${synced ? `；并同步 ${synced} 道同题` : ''}。`
+        : `没有需要补齐的选填，${kept} 道已有记录保持不变。`);
       return;
     }
 
@@ -1520,17 +1527,22 @@
       const year = Number(card.dataset.year);
       const subject = Number(card.dataset.subject);
       const rec = ensureScoreRec(year, subject);
-      let count = 0;
+      let filled = 0;
+      let kept = 0;
       let synced = 0;
+      // 只补齐还没填写的大题，已经填过的分数保持原样
       for (const q of (PAPERS[paperKey(year, subject)] || [])) {
         if (qKind(year, q.n) !== 'big') continue;
+        if (rec.big[q.n] !== undefined) { kept++; continue; }
         rec.big[q.n] = qMax(year, q.n);
+        filled++;
         synced += propagateScore(year, subject, q.n, rec.big[q.n], false);
-        count++;
       }
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
-      setScoreStatus(fresh, `已把 ${count} 道大题填成满分，可继续逐题修改${synced ? `；并同步 ${synced} 道同题` : ''}。`);
+      setScoreStatus(fresh, filled
+        ? `已补齐 ${filled} 道未填写的大题为满分，保留 ${kept} 道已有分数，可继续逐题修改${synced ? `；并同步 ${synced} 道同题` : ''}。`
+        : `没有需要补齐的大题，${kept} 道已有分数保持不变。`);
       return;
     }
 
