@@ -447,6 +447,9 @@
         <div class="scblock-head">
           <h4>解答题</h4>
           <span class="scblock-meta">${bigQs.length} 题 · ${c.big.max} 分</span>
+          <div class="scbtns">
+            <button class="minibtn" type="button" data-score-all-big title="把所有解答题填成满分，之后仍可逐题修改">大题全满分</button>
+          </div>
         </div>
         <div class="bigrows">${bigRows}</div>
         <p class="scsum">已填 <b data-score-set="big">${c.big.set}</b> / ${c.big.count} 题 · 大题 <b data-score-sum="big">${fmtScore(c.big.score)}</b> / ${c.big.max}</p>
@@ -1507,6 +1510,27 @@
       saveScores();
       const fresh = repaintScorecard(card, year, subject);
       setScoreStatus(fresh, `已全选选填${synced ? `，并同步 ${synced} 道同题` : ''}；点做错的题号可改为做错。`);
+      return;
+    }
+
+    const scoreAllBig = e.target.closest('[data-score-all-big]');
+    if (scoreAllBig) {
+      const card = scoreAllBig.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const rec = ensureScoreRec(year, subject);
+      let count = 0;
+      let synced = 0;
+      for (const q of (PAPERS[paperKey(year, subject)] || [])) {
+        if (qKind(year, q.n) !== 'big') continue;
+        rec.big[q.n] = qMax(year, q.n);
+        synced += propagateScore(year, subject, q.n, rec.big[q.n], false);
+        count++;
+      }
+      saveScores();
+      const fresh = repaintScorecard(card, year, subject);
+      setScoreStatus(fresh, `已把 ${count} 道大题填成满分，可继续逐题修改${synced ? `；并同步 ${synced} 道同题` : ''}。`);
       return;
     }
 
