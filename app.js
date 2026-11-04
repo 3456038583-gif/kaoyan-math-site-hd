@@ -215,15 +215,70 @@
     return out;
   }
 
-  // 同一年另一科目里题干完全相同的题（数一/数二/数三经常共用题目）
+  // 题干归一化：忽略公式排版、空格、标点、配图路径等差异
+  const NORM_CACHE = new Map();
+  const normText = s => {
+    const raw = String(s);
+    let v = NORM_CACHE.get(raw);
+    if (v !== undefined) return v;
+    v = raw
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<fig>[\s\S]*?<\/fig>/gi, ' FIG ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\\[a-zA-Z]+\*?/g, ' ')
+      .replace(/[{}$\\^_&%#~]/g, ' ')
+      .replace(/[，。；：、？！“”‘’（）()【】\[\],.;:!?<>|=\-+]/g, ' ')
+      .replace(/\s+/g, '')
+      .toLowerCase();
+    NORM_CACHE.set(raw, v);
+    return v;
+  };
+  const bigramDice = (a, b) => {
+    if (!a && !b) return 1;
+    if (!a || !b) return 0;
+    const grams = s => {
+      const m = new Map();
+      for (let i = 0; i < s.length - 1; i++) {
+        const g = s.slice(i, i + 2);
+        m.set(g, (m.get(g) || 0) + 1);
+      }
+      return m;
+    };
+    const A = grams(a), B = grams(b);
+    let inter = 0, total = 0;
+    for (const [g, n] of A) {
+      total += n;
+      if (B.has(g)) inter += Math.min(n, B.get(g));
+    }
+    for (const n of B.values()) total += n;
+    return total ? 2 * inter / total : 0;
+  };
+
+  // 同一道题在不同卷子里常有“该方程的”“设函数”之类的细微措辞差异，
+  // 因此先做归一化精确匹配，再对选择题要求选项一致、对填空/解答要求高度相似。
+  function stemsMatch(a, b) {
+    if (!!a.o !== !!b.o) return false;
+    const na = normText(a.x), nb = normText(b.x);
+    if (na === nb) return true;
+    if (a.o && b.o) {
+      if (a.o.length !== b.o.length) return false;
+      for (let i = 0; i < a.o.length; i++) {
+        if (normText(a.o[i]) !== normText(b.o[i])) return false;
+      }
+      return bigramDice(na, nb) >= 0.82;
+    }
+    return bigramDice(na, nb) >= 0.90;
+  }
+
+  // 同一年另一科目里的同一道题（数一/数二/数三经常共用题目）
   function otherSameQuestions(year, subject, q) {
-    const stem = String(q.x).trim();
+    const kind = qKind(year, q.n);
     const out = [];
     const seen = new Set();
     for (const s of [1, 2, 3]) {
       if (s === subject) continue;
       for (const o of (PAPERS[paperKey(year, s)] || [])) {
-        if (!!o.o !== !!q.o || String(o.x).trim() !== stem) continue;
+        if (qKind(year, o.n) !== kind || !stemsMatch(q, o)) continue;
         const k = `${s}-${o.n}`;
         if (seen.has(k)) continue;
         seen.add(k);
