@@ -44,6 +44,7 @@
 :root[data-view="key"] { --accent: #a33a2c; --accent-soft: #f4e2de; }
 :root[data-view="supp"] { --accent: #6b5a2e; --accent-soft: #efe9d8; }
 :root[data-view="wrong"] { --accent: #6d4c7d; --accent-soft: #ece4f0; }
+:root[data-view="mock"] { --accent: #2f6f6a; --accent-soft: #e2efec; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -75,6 +76,7 @@
   :root:not([data-theme="light"])[data-view="key"] { --accent: #e0735f; --accent-soft: #2d1916; }
   :root:not([data-theme="light"])[data-view="supp"] { --accent: #c9b479; --accent-soft: #2a2416; }
   :root:not([data-theme="light"])[data-view="wrong"] { --accent: #c4a3d4; --accent-soft: #2a1f30; }
+  :root:not([data-theme="light"])[data-view="mock"] { --accent: #74c0b8; --accent-soft: #182a28; }
 }
 
 * { box-sizing: border-box; }
@@ -266,7 +268,8 @@ h1 {
 .mod .wcnt[hidden] { display: none; }
 .mod[aria-pressed="true"] .wcnt { background: var(--accent-ink); color: var(--accent); }
 html[data-view="wrong"] .yearbar,
-html[data-view="stats"] .yearbar { display: none; }
+html[data-view="stats"] .yearbar,
+html[data-view="mock"] .yearbar { display: none; }
 .yearbar {
   display: flex;
   align-items: center;
@@ -683,6 +686,55 @@ main { padding-top: 24px; }
 .statsempty p { margin: 0 0 7px; font-size: 13px; color: var(--muted); }
 .statsempty p.big { font-family: var(--serif); font-size: 19px; font-weight: 700; color: var(--ink); }
 .statsempty .btn { margin-top: 9px; }
+
+/* 模拟卷：新建表单、名称与模块汇总 */
+.mockformcard { padding: 16px 18px 14px; margin-top: 18px; }
+.mockform { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.mockfield { display: flex; flex-direction: column; gap: 4px; flex: 1 1 240px; min-width: 0; }
+.mockfield--subj { flex: 0 0 130px; }
+.mockfield > span { font-size: 11.5px; color: var(--muted); }
+.mockfield input,
+.mockfield select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.mockfield input:focus,
+.mockfield select:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.mockadd { height: 36px; align-self: flex-end; }
+.mockhint { margin: 10px 0 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.mockstats { margin-top: 16px; }
+.mockcard { margin-top: 12px; }
+.mockname { min-width: 0; overflow-wrap: anywhere; }
+.mocksub {
+  flex: 0 0 auto;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  padding: 1px 7px;
+  border-radius: 99px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.mockmods { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mockmod {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--mask);
+}
+.mockmod b { color: var(--ink); font-weight: 600; }
+.mockmod i { font-style: normal; }
 
 /* 成绩走势折线图 */
 .legend {
@@ -1300,6 +1352,8 @@ footer .mono { font-family: var(--mono); }
   /* 工具类现在有四项：2×2 排布，避免第三行只剩一个 */
   .modgroup--tools { grid-template-columns: repeat(2, 1fr); margin-left: 0; }
   .modgroup--tools::before { display: none; }
+  /* 工具类为奇数项时，最后一项占满整行 */
+  .modgroup--tools .mod:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .mod {
     padding: 8px 4px;
     font-size: 12.5px;
@@ -1331,6 +1385,8 @@ footer .mono { font-family: var(--mono); }
   .segmented { margin-top: 12px; width: 100%; }
   .segbtn { flex: 1; padding: 8px 5px; text-align: center; }
   .scorerow { grid-template-columns: 56px minmax(0, 1fr) 82px; gap: 8px; }
+  .mockfield, .mockfield--subj { flex: 1 1 100%; }
+  .mockadd { width: 100%; justify-content: center; }
 }
 @media (max-width: 520px) {
   body { font-size: 14px; }
@@ -1359,6 +1415,7 @@ footer .mono { font-family: var(--mono); }
   .supp-table th, .supp-table td { padding: 6px 7px; }
   /* 成绩面板：题号密排，大题的题干折到下一行 */
   .scorecard { padding: 14px 14px 12px; }
+  .mockformcard { padding: 14px 14px 12px; }
   .qsgroup { gap: 6px; }
   .qsgroup-lab { flex-basis: 28px; }
   .qsgrid { gap: 4px; }
@@ -1489,6 +1546,7 @@ html[data-loading="true"] #app::after {
           <button class="mod" type="button" data-view="key" aria-pressed="false">重点题</button>
           <button class="mod" type="button" data-view="supp" aria-pressed="false">补充真题</button>
           <button class="mod" type="button" data-view="wrong" aria-pressed="false">错题本<span class="wcnt" id="wcount" hidden>0</span></button>
+          <button class="mod" type="button" data-view="mock" aria-pressed="false">模拟卷</button>
           <button class="mod" type="button" data-view="stats" aria-pressed="false">成绩统计</button>
         </div>
       </nav>

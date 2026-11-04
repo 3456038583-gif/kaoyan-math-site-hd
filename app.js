@@ -105,7 +105,59 @@
     return Number.isInteger(r) ? String(r) : r.toFixed(1);
   };
 
-  const state = { view: 'm1', year: 2010, level: 'all', keyOnly: false, statsSubject: 1 };
+  /* ── 模拟卷：2021 年后的题型结构，名称和分数都由用户填写 ── */
+  const MOCK_KEY = 'kaoyanMath.mocks.v1';
+  const MOCK_KIND = n => n <= 10 ? 'choice' : n <= 16 ? 'fill' : 'big';
+  const MOCK_MAX = n => n <= 16 ? 5 : n === 17 ? 10 : 12;
+  // 题位与 2021 年后的真题一致：数一/数三 1—4 高数、5—7 线代、8—10 概率；
+  // 数二不考概率，1—7 高数、8—10 线代。填空和解答题沿用同样的模块顺序。
+  function mockModule(subject, n) {
+    if (subject === 2) {
+      return n <= 7 || (n >= 11 && n <= 15) || (n >= 17 && n <= 21) ? '高数' : '线代';
+    }
+    if (n <= 4 || (n >= 11 && n <= 14) || (n >= 17 && n <= 20)) return '高数';
+    if (n === 5 || n === 6 || n === 7 || n === 15 || n === 21) return '线代';
+    return '概率';
+  }
+  const mockId = () => `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  const MOCKS = [];
+  (function loadMocks() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(MOCK_KEY) || 'null');
+      if (!Array.isArray(raw)) return;
+      for (const r of raw) {
+        if (!r || typeof r !== 'object') continue;
+        const subject = Number(r.subject);
+        const name = String(r.name || '').trim().slice(0, 40);
+        const id = String(r.id || '');
+        if (![1, 2, 3].includes(subject) || !name || !id) continue;
+        const clean = { id, name, subject, sel: {}, big: {}, created: Number(r.created) || Date.now() };
+        if (r.sel && typeof r.sel === 'object') {
+          for (const [n, v] of Object.entries(r.sel)) {
+            const qn = Number(n);
+            if (qn >= 1 && qn <= 16 && (v === 0 || v === 1)) clean.sel[qn] = v;
+          }
+        }
+        if (r.big && typeof r.big === 'object') {
+          for (const [n, v] of Object.entries(r.big)) {
+            const qn = Number(n);
+            if (qn >= 17 && qn <= 22 && Number.isFinite(v)) {
+              clean.big[qn] = Math.min(MOCK_MAX(qn), Math.max(0, Number(v)));
+            }
+          }
+        }
+        MOCKS.push(clean);
+      }
+    } catch (e) { /* 隐私模式或存储损坏时忽略 */ }
+  })();
+  const saveMocks = () => {
+    try {
+      localStorage.setItem(MOCK_KEY, JSON.stringify(MOCKS));
+    } catch (e) { /* 隐私模式或存储已满时忽略 */ }
+    VIEW_CACHE.clear();
+  };
+
+  const state = { view: 'm1', year: 2010, level: 'all', keyOnly: false, statsSubject: 1, mockSubject: 1 };
   // 已渲染页面的 DOM 缓存（按视图 + 年份）；成绩改动后由 saveScores 统一清空
   const VIEW_CACHE = new Map();
   const VIEW_CACHE_MAX = 5;
@@ -206,6 +258,47 @@
     const sel = merge(cats.choice, cats.fill);
     const total = merge(sel, cats.big);
     const out = Object.assign({}, cats, { sel, total, year, subject });
+    for (const key of ['choice', 'fill', 'sel', 'big', 'total', '高数', '线代', '概率']) {
+      const c = out[key];
+      c.pct = c.max ? c.score / c.max * 100 : null;
+      c.complete = c.count > 0 && c.set === c.count;
+    }
+    out.hasAny = total.any;
+    return out;
+  }
+
+  // 模拟卷没有题干，只按固定的 2021 年题位和模块折算分数
+  function computeMockScore(mock) {
+    const mk = () => ({ score: 0, max: 0, any: false, set: 0, count: 0, correct: 0 });
+    const cats = { choice: mk(), fill: mk(), big: mk(), '高数': mk(), '线代': mk(), '概率': mk() };
+    for (let n = 1; n <= 22; n++) {
+      const kind = MOCK_KIND(n);
+      const max = MOCK_MAX(n);
+      const isBig = kind === 'big';
+      const raw = isBig ? mock.big[n] : mock.sel[n];
+      const has = raw !== undefined;
+      const got = !has ? 0 : isBig ? Math.min(max, Math.max(0, raw)) : (raw ? max : 0);
+      for (const key of [kind, mockModule(mock.subject, n)]) {
+        const c = cats[key];
+        if (!c) continue;
+        c.max += max;
+        c.score += got;
+        c.count++;
+        if (has) { c.any = true; c.set++; }
+        if (!isBig && raw === 1) c.correct++;
+      }
+    }
+    const merge = (a, b) => ({
+      score: a.score + b.score,
+      max: a.max + b.max,
+      any: a.any || b.any,
+      set: a.set + b.set,
+      count: a.count + b.count,
+      correct: a.correct + b.correct
+    });
+    const sel = merge(cats.choice, cats.fill);
+    const total = merge(sel, cats.big);
+    const out = Object.assign({}, cats, { sel, total, mock, subject: mock.subject });
     for (const key of ['choice', 'fill', 'sel', 'big', 'total', '高数', '线代', '概率']) {
       const c = out[key];
       c.pct = c.max ? c.score / c.max * 100 : null;
@@ -548,6 +641,231 @@
     put('[data-score-correct]', c.sel.correct);
     card.classList.toggle('has-score', c.hasAny);
   }
+
+  /* ── 模拟卷面板 ── */
+  const mockDate = ts => {
+    const d = new Date(ts);
+    const p = v => String(v).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  function mockRows(subject) {
+    return MOCKS.filter(m => m.subject === subject)
+      .slice()
+      .sort((a, b) => b.created - a.created)
+      .map(m => computeMockScore(m));
+  }
+
+  function mockCounts() {
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    for (const m of MOCKS) counts[m.subject]++;
+    return counts;
+  }
+
+  function mockModsHTML(c) {
+    return ['高数', '线代', '概率']
+      .filter(k => c[k] && c[k].max > 0)
+      .map(k => `<span class="mockmod">${k} <b>${fmtScore(c[k].score)}</b><i>/ ${fmtScore(c[k].max)}</i></span>`)
+      .join('');
+  }
+
+  function mockChipHTML(mock, n) {
+    const v = mock.sel[n];
+    const module = mockModule(mock.subject, n);
+    return `<button class="qsbtn${v === 0 ? ' is-wrong' : ''}" type="button" data-mock-sel="${n}" aria-pressed="${v === 1}" title="第 ${n} 题 · ${module} · 5 分">${n}</button>`;
+  }
+
+  function mockCardHTML(mock) {
+    const c = computeMockScore(mock);
+    const chipRows = [['选择', 1, 10], ['填空', 11, 16]].map(([label, from, to]) => {
+      let chips = '';
+      for (let n = from; n <= to; n++) chips += mockChipHTML(mock, n);
+      return `<div class="qsgroup"><span class="qsgroup-lab">${label}</span><div class="qsgrid">${chips}</div></div>`;
+    }).join('');
+
+    let bigRows = '';
+    for (let n = 17; n <= 22; n++) {
+      const max = MOCK_MAX(n);
+      const v = mock.big[n];
+      bigRows += `<div class="bigrow">
+        <span class="bigq">${n}</span>
+        <span class="bigmeta"><b>${mockModule(mock.subject, n)}</b> · ${max} 分</span>
+        <span class="biginput"><input type="number" inputmode="decimal" min="0" max="${max}" step="0.5" placeholder="—" value="${v === undefined ? '' : fmtScore(v)}" data-mock-big="${n}" aria-label="第 ${n} 题得分，满分 ${max} 分"><span class="bigmax">/ ${max}</span></span>
+      </div>`;
+    }
+
+    return `<section class="card scorecard mockcard${c.hasAny ? ' has-score' : ''}" data-mockcard data-mock-id="${attr(mock.id)}">
+      <div class="scorecard-head">
+        <div>
+          <div class="rtitle"><span class="mockname">${esc(mock.name)}</span><span class="mocksub">${SUBJ[mock.subject]}</span></div>
+          <p class="scmeta">${mockDate(mock.created)} 添加 · 满分 <b>150</b> · 选填 <b>80</b> + 大题 <b>70</b></p>
+        </div>
+        <div class="scorenow"><span>当前得分</span><b data-mock-sum="total">${fmtScore(c.total.score)}</b><i>/ 150</i></div>
+      </div>
+      <div class="mockmods" data-mock-mods>${mockModsHTML(c)}</div>
+      <div class="scblock">
+        <div class="scblock-head">
+          <h4>选择 · 填空</h4>
+          <span class="scblock-meta">选择 50 分 · 填空 30 分 · 选填 80 分</span>
+          <div class="scbtns">
+            <button class="minibtn" type="button" data-mock-all title="只把尚未标记的选填标为做对，已有记录保持不变">全选选填</button>
+            <button class="minibtn" type="button" data-mock-clear-sel>清空选填</button>
+          </div>
+        </div>
+        ${chipRows}
+        <p class="scsum">做对 <b data-mock-correct>${c.sel.correct}</b> / ${c.sel.count} 题（已标记 <b data-mock-set="sel">${c.sel.set}</b> / ${c.sel.count}）· 选填 <b data-mock-sum="sel">${fmtScore(c.sel.score)}</b> / ${c.sel.max}</p>
+      </div>
+      <div class="scblock">
+        <div class="scblock-head">
+          <h4>解答题</h4>
+          <span class="scblock-meta">6 题 · 70 分</span>
+          <div class="scbtns">
+            <button class="minibtn" type="button" data-mock-all-big title="只把尚未填写的大题补成满分，已有分数保持不变">大题全满分</button>
+          </div>
+        </div>
+        <div class="bigrows">${bigRows}</div>
+        <p class="scsum">已填 <b data-mock-set="big">${c.big.set}</b> / ${c.big.count} 题 · 大题 <b data-mock-sum="big">${fmtScore(c.big.score)}</b> / ${c.big.max}</p>
+      </div>
+      <div class="scorefoot">
+        <span>模拟卷按 2021 年后的题位记分，未标记／未填写的题按 0 分计。「全选」和「大题全满分」只补齐未记录的部分。</span>
+        <div class="scorefoot-btns">
+          <button class="minibtn" type="button" data-mock-rename>重命名</button>
+          <button class="minibtn danger" type="button" data-mock-reset>清空本卷成绩</button>
+          <button class="minibtn danger" type="button" data-mock-delete>删除模拟卷</button>
+        </div>
+        <span class="scorestatus" data-mock-status></span>
+      </div>
+    </section>`;
+  }
+
+  function repaintMockCard(card, mock) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = mockCardHTML(mock);
+    const fresh = tmp.firstElementChild;
+    if (!fresh) return card;
+    card.replaceWith(fresh);
+    return fresh;
+  }
+
+  function setMockStatus(card, msg) {
+    const el = card && card.querySelector('[data-mock-status]');
+    if (el) el.textContent = msg;
+  }
+
+  function updateMockSums(card, mock) {
+    const c = computeMockScore(mock);
+    const put = (sel, val) => {
+      const el = card.querySelector(sel);
+      if (el) el.textContent = val;
+    };
+    put('[data-mock-sum="total"]', fmtScore(c.total.score));
+    put('[data-mock-set="sel"]', c.sel.set);
+    put('[data-mock-sum="sel"]', fmtScore(c.sel.score));
+    put('[data-mock-correct]', c.sel.correct);
+    put('[data-mock-set="big"]', c.big.set);
+    put('[data-mock-sum="big"]', fmtScore(c.big.score));
+    const mods = card.querySelector('[data-mock-mods]');
+    if (mods) mods.innerHTML = mockModsHTML(c);
+    card.classList.toggle('has-score', c.hasAny);
+  }
+
+  function mockStatCard(label, value, sub) {
+    return `<div class="stat">
+      <span class="stat-label">${label}</span>
+      <span class="stat-value">${value}</span>
+      <span class="stat-sub">${sub}</span>
+    </div>`;
+  }
+
+  function mockStatsBlockHTML(rows, subject) {
+    if (!rows.length) {
+      return `<div class="card statsempty mockempty">
+        <p class="big">还没有 ${SUBJ[subject]} 的模拟卷</p>
+        <p>在上面输入模拟卷名称并添加，记录选择、填空和大题分数，这里会自动汇总平均分与各模块得分。</p>
+      </div>`;
+    }
+    const totals = rows.filter(r => r.sel.any && r.big.any);
+    const avg = (list, fn) => list.length ? list.reduce((s, r) => s + fn(r), 0) / list.length : null;
+    const avgTotal = avg(totals, r => r.total.score);
+    const rateTotal = avg(totals, r => r.total.pct);
+    const best = totals.length ? Math.max(...totals.map(r => r.total.score)) : null;
+    const totalSub = avgTotal === null
+      ? '满分 150 · 还没有完整记录'
+      : `得分率 ${Math.round(rateTotal)}% · 最高 ${fmtScore(best)} · ${totals.length} 套`;
+    let html = mockStatCard('平均总分', avgTotal === null ? '—' : `${fmtScore(avgTotal)}<small>/ 150</small>`, totalSub);
+
+    for (const [key, label] of [['choice', '选择'], ['fill', '填空'], ['sel', '选填'], ['big', '大题'], ['高数', '高数'], ['线代', '线代'], ['概率', '概率']]) {
+      if (key === '概率' && subject === 2) {
+        html += mockStatCard('概率', '不考', '数学二不考该模块');
+        continue;
+      }
+      const list = rows.filter(r => r[key] && r[key].any && r[key].max > 0);
+      const a = avg(list, r => r[key].score);
+      const p = avg(list, r => r[key].pct);
+      const max = rows[0][key].max;
+      const sub = a === null
+        ? `满分 ${max} · 还没有记录`
+        : `得分率 ${Math.round(p)}% · 满分 ${max} · ${list.length} 套`;
+      html += mockStatCard(label, a === null ? '—' : `${fmtScore(a)}<small>分</small>`, sub);
+    }
+    return `<div class="stats mockstats">${html}</div>`;
+  }
+
+  function mockFormHTML(subject) {
+    const hint = subject === 2
+      ? '数二题位：选择 1—7 高数、8—10 线代；填空 11—15 高数、16 线代；解答 17—21 高数、22 线代。'
+      : '数一/数三题位：选择 1—4 高数、5—7 线代、8—10 概率；填空 11—14 高数、15 线代、16 概率；解答 17—20 高数、21 线代、22 概率。';
+    return `<section class="card mockformcard">
+      <form class="mockform" data-mock-form>
+        <label class="mockfield">
+          <span>模拟卷名称</span>
+          <input type="text" maxlength="40" placeholder="例如：李林六套卷（一）" data-mock-name-input autocomplete="off" required>
+        </label>
+        <label class="mockfield mockfield--subj">
+          <span>科目</span>
+          <select data-mock-subject-input>
+            ${[1, 2, 3].map(s => `<option value="${s}"${s === subject ? ' selected' : ''}>${SUBJ[s]}</option>`).join('')}
+          </select>
+        </label>
+        <button class="btn primary mockadd" type="submit">添加模拟卷</button>
+      </form>
+      <p class="mockhint">按 2021 年后的 150 分结构记分：选择 1—10 每题 5 分，填空 11—16 每题 5 分；解答 17 题 10 分、18—22 题每题 12 分。${hint}</p>
+    </section>`;
+  }
+
+  function mockHTML() {
+    const subject = state.mockSubject;
+    const rows = mockRows(subject);
+    const counts = mockCounts();
+    const seg = [1, 2, 3].map(s =>
+      `<button class="segbtn" type="button" data-mock-subj="${s}" aria-pressed="${s === subject}">${SUBJ[s]}<span class="cnt">${counts[s]}</span></button>`
+    ).join('');
+    const header = `<header class="yearhero statshead">
+      <div>
+        <p class="kicker">模拟卷</p>
+        <h2>我的模拟卷</h2>
+        <p class="meta">${SUBJ[subject]} · ${rows.length ? `已添加 <b>${rows.length}</b> 套` : '还没有模拟卷'} · 按 2021 年后的 150 分结构记录 · 数据保存在本机浏览器</p>
+      </div>
+      <div class="segmented" role="group" aria-label="选择科目">${seg}</div>
+    </header>`;
+    const detail = rows.length ? `<section class="sumsec">
+      <div class="sumsec-head"><span class="sumsec-title">模拟卷明细</span><span class="sumsec-avg">按添加时间倒序</span></div>
+      <p class="sumnote">每套卷按「已得 / 满分」记录；未标记的选填和未填写的大题按 0 分计。</p>
+    </section>` + rows.map(r => mockCardHTML(r.mock)).join('') : '';
+    return `${header}${mockFormHTML(subject)}<div data-mock-stats>${mockStatsBlockHTML(rows, subject)}</div>${detail}`;
+  }
+
+  function refreshMockStats() {
+    const wrap = appEl.querySelector('[data-mock-stats]');
+    if (!wrap) return;
+    wrap.innerHTML = mockStatsBlockHTML(mockRows(state.mockSubject), state.mockSubject);
+  }
+
+  const mockFromEl = el => {
+    const card = el.closest('[data-mockcard]');
+    if (!card) return null;
+    return { card, mock: MOCKS.find(m => m.id === card.dataset.mockId) || null };
+  };
 
   /* ── 题目卡 ── */
   function renderCard(q, subject, year, opts) {
@@ -1378,7 +1696,9 @@
 
   const cacheKeyOf = () => state.view === 'stats'
     ? `stats|${state.statsSubject}|${statsChartWidth()}`
-    : `${state.view}|${state.year}`;
+    : state.view === 'mock'
+      ? `mock|${state.mockSubject}`
+      : `${state.view}|${state.year}`;
 
   // 难度 / 重点筛选只改显隐，不重建页面
   function applyFilter() {
@@ -1408,6 +1728,7 @@
 
   // 错题本 / 成绩统计会跨年份取题，涉及的年份都要先载入
   function neededYears() {
+    if (state.view === 'mock') return [];
     if (state.view === 'stats') {
       const years = [...new Set(Object.keys(SCORES).map(k => Number(k.split('-')[0])))];
       return years.filter(y => ALL_YEARS.includes(y));
@@ -1440,6 +1761,7 @@
     try {
       const qs = new URLSearchParams({ view: state.view, year: String(state.year) });
       if (state.view === 'stats') qs.set('subj', String(state.statsSubject));
+      if (state.view === 'mock') qs.set('subj', String(state.mockSubject));
       history.replaceState(null, '', `?${qs}`);
     } catch (e) { /* file:// 下部分浏览器不允许改写地址 */ }
 
@@ -1456,6 +1778,7 @@
       else if (state.view === 'key') appEl.innerHTML = keyHTML();
       else if (state.view === 'wrong') appEl.innerHTML = wrongHTML();
       else if (state.view === 'stats') { appEl.innerHTML = statsHTML(); bindStatsCharts(); }
+      else if (state.view === 'mock') appEl.innerHTML = mockHTML();
       else appEl.innerHTML = suppHTML();
       renderMath();
       VIEW_CACHE.set(cacheKey, [...appEl.childNodes]);
@@ -1529,6 +1852,123 @@
 
   /* ── 事件 ── */
   appEl.addEventListener('click', e => {
+    const mockSubj = e.target.closest('[data-mock-subj]');
+    if (mockSubj) {
+      const s = Number(mockSubj.dataset.mockSubj);
+      if (s === state.mockSubject) return;
+      state.mockSubject = s;
+      render();
+      scrollTop();
+      return;
+    }
+
+    const mockChip = e.target.closest('[data-mock-sel]');
+    if (mockChip) {
+      const ctx = mockFromEl(mockChip);
+      if (!ctx || !ctx.mock) return;
+      const n = Number(mockChip.dataset.mockSel);
+      const cur = ctx.mock.sel[n];
+      if (cur === 1) ctx.mock.sel[n] = 0;
+      else if (cur === 0) delete ctx.mock.sel[n];
+      else ctx.mock.sel[n] = 1;
+      saveMocks();
+      repaintMockCard(ctx.card, ctx.mock);
+      refreshMockStats();
+      return;
+    }
+
+    const mockAll = e.target.closest('[data-mock-all]');
+    if (mockAll) {
+      const ctx = mockFromEl(mockAll);
+      if (!ctx || !ctx.mock) return;
+      let filled = 0;
+      let kept = 0;
+      for (let n = 1; n <= 16; n++) {
+        if (ctx.mock.sel[n] !== undefined) { kept++; continue; }
+        ctx.mock.sel[n] = 1;
+        filled++;
+      }
+      saveMocks();
+      const fresh = repaintMockCard(ctx.card, ctx.mock);
+      refreshMockStats();
+      setMockStatus(fresh, filled
+        ? `已补齐 ${filled} 道未标记的选填为做对，保留 ${kept} 道已有记录。`
+        : `没有需要补齐的选填，${kept} 道已有记录保持不变。`);
+      return;
+    }
+
+    const mockAllBig = e.target.closest('[data-mock-all-big]');
+    if (mockAllBig) {
+      const ctx = mockFromEl(mockAllBig);
+      if (!ctx || !ctx.mock) return;
+      let filled = 0;
+      let kept = 0;
+      for (let n = 17; n <= 22; n++) {
+        if (ctx.mock.big[n] !== undefined) { kept++; continue; }
+        ctx.mock.big[n] = MOCK_MAX(n);
+        filled++;
+      }
+      saveMocks();
+      const fresh = repaintMockCard(ctx.card, ctx.mock);
+      refreshMockStats();
+      setMockStatus(fresh, filled
+        ? `已补齐 ${filled} 道未填写的大题为满分，保留 ${kept} 道已有分数，可继续逐题修改。`
+        : `没有需要补齐的大题，${kept} 道已有分数保持不变。`);
+      return;
+    }
+
+    const mockClearSel = e.target.closest('[data-mock-clear-sel]');
+    if (mockClearSel) {
+      const ctx = mockFromEl(mockClearSel);
+      if (!ctx || !ctx.mock) return;
+      ctx.mock.sel = {};
+      saveMocks();
+      const fresh = repaintMockCard(ctx.card, ctx.mock);
+      refreshMockStats();
+      setMockStatus(fresh, '已清空本卷选填记录。');
+      return;
+    }
+
+    const mockReset = e.target.closest('[data-mock-reset]');
+    if (mockReset) {
+      const ctx = mockFromEl(mockReset);
+      if (!ctx || !ctx.mock) return;
+      if (!window.confirm(`清空模拟卷「${ctx.mock.name}」的成绩？模拟卷名称会保留。`)) return;
+      ctx.mock.sel = {};
+      ctx.mock.big = {};
+      saveMocks();
+      const fresh = repaintMockCard(ctx.card, ctx.mock);
+      refreshMockStats();
+      setMockStatus(fresh, '已清空本卷成绩，名称保留。');
+      return;
+    }
+
+    const mockRename = e.target.closest('[data-mock-rename]');
+    if (mockRename) {
+      const ctx = mockFromEl(mockRename);
+      if (!ctx || !ctx.mock) return;
+      const next = window.prompt('修改模拟卷名称', ctx.mock.name);
+      if (next === null) return;
+      const name = next.trim().slice(0, 40);
+      if (!name) return;
+      ctx.mock.name = name;
+      saveMocks();
+      repaintMockCard(ctx.card, ctx.mock);
+      return;
+    }
+
+    const mockDelete = e.target.closest('[data-mock-delete]');
+    if (mockDelete) {
+      const ctx = mockFromEl(mockDelete);
+      if (!ctx || !ctx.mock) return;
+      if (!window.confirm(`删除模拟卷「${ctx.mock.name}」？该卷的所有分数会一并删除，此操作不可撤销。`)) return;
+      const idx = MOCKS.indexOf(ctx.mock);
+      if (idx >= 0) MOCKS.splice(idx, 1);
+      saveMocks();
+      render();
+      return;
+    }
+
     const scoreQ = e.target.closest('[data-score-q]');
     if (scoreQ) {
       const card = scoreQ.closest('[data-scorecard]');
@@ -1783,7 +2223,43 @@
     }
   });
 
+  appEl.addEventListener('submit', e => {
+    const form = e.target.closest('[data-mock-form]');
+    if (!form) return;
+    e.preventDefault();
+    const nameInput = form.querySelector('[data-mock-name-input]');
+    const subjectInput = form.querySelector('[data-mock-subject-input]');
+    const name = (nameInput.value || '').trim().slice(0, 40);
+    const subject = Number(subjectInput.value);
+    if (!name) { nameInput.focus(); return; }
+    if (![1, 2, 3].includes(subject)) return;
+    MOCKS.push({ id: mockId(), name, subject, sel: {}, big: {}, created: Date.now() });
+    state.mockSubject = subject;
+    saveMocks();
+    render();
+  });
+
   appEl.addEventListener('input', e => {
+    const mockInp = e.target.closest('[data-mock-big]');
+    if (mockInp) {
+      const ctx = mockFromEl(mockInp);
+      if (!ctx || !ctx.mock) return;
+      const n = Number(mockInp.dataset.mockBig);
+      const raw = mockInp.value.trim();
+      if (raw === '') {
+        delete ctx.mock.big[n];
+      } else {
+        const v = Number(raw);
+        if (!Number.isFinite(v)) return;
+        const clamped = Math.min(MOCK_MAX(n), Math.max(0, v));
+        ctx.mock.big[n] = clamped;
+        if (clamped !== v) mockInp.value = fmtScore(clamped);
+      }
+      saveMocks();
+      updateMockSums(ctx.card, ctx.mock);
+      refreshMockStats();
+      return;
+    }
     const inp = e.target.closest('[data-score-big]');
     if (!inp) return;
     const card = inp.closest('[data-scorecard]');
@@ -1811,6 +2287,15 @@
 
   // 失焦时把越界或只写了一半的数字回填成实际存下的分数
   appEl.addEventListener('focusout', e => {
+    const mockInp = e.target.closest('[data-mock-big]');
+    if (mockInp) {
+      const ctx = mockFromEl(mockInp);
+      if (!ctx || !ctx.mock) return;
+      const n = Number(mockInp.dataset.mockBig);
+      const v = ctx.mock.big[n];
+      mockInp.value = v === undefined ? '' : fmtScore(v);
+      return;
+    }
     const inp = e.target.closest('[data-score-big]');
     if (!inp) return;
     const card = inp.closest('[data-scorecard]');
@@ -1829,6 +2314,10 @@
     if (btn.dataset.view === 'stats') {
       const cur = SUBJ_VIEW[state.view];
       if (cur) state.statsSubject = cur;
+    }
+    if (btn.dataset.view === 'mock') {
+      const cur = SUBJ_VIEW[state.view];
+      if (cur) state.mockSubject = cur;
     }
     state.view = btn.dataset.view;
     render();
@@ -1865,9 +2354,12 @@
   /* ── 启动 ── */
   const params = new URLSearchParams(location.search);
   const pv = params.get('view');
-  if (pv && ['m1', 'm2', 'm3', 'key', 'supp', 'wrong', 'stats'].includes(pv)) state.view = pv;
+  if (pv && ['m1', 'm2', 'm3', 'key', 'supp', 'wrong', 'stats', 'mock'].includes(pv)) state.view = pv;
   const ps = Number(params.get('subj'));
-  if (ps >= 1 && ps <= 3) state.statsSubject = ps;
+  if (ps >= 1 && ps <= 3) {
+    state.statsSubject = ps;
+    state.mockSubject = ps;
+  }
   const py = Number(params.get('year'));
   const live = liveYears();
   if (live.includes(py)) state.year = py;
