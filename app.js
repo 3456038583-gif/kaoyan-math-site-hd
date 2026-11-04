@@ -26,7 +26,86 @@
         { title: '三、解答题', from: 15, to: 23, meta: '9 题 · 共 94 分' }
       ];
 
-  const state = { view: 'm1', year: 2010, level: 'all', keyOnly: false };
+  /* ── 成绩记录：题型分值、存储与统计 ── */
+  // 2021 年改革前：选 8×4、填 6×4、解答 15—19 各 10 分、20—23 各 11 分
+  // 2021 年起：选 10×5、填 6×5、解答 17 题 10 分、18—22 各 12 分
+  const qKind = (year, n) => {
+    if (year >= 2021) return n <= 10 ? 'choice' : n <= 16 ? 'fill' : 'big';
+    return n <= 8 ? 'choice' : n <= 14 ? 'fill' : 'big';
+  };
+  const qMax = (year, n) => {
+    if (year >= 2021) return n <= 16 ? 5 : n === 17 ? 10 : 12;
+    return n <= 14 ? 4 : n <= 19 ? 10 : 11;
+  };
+  const paperKey = (year, subject) => `${year}-${subject}`;
+
+  const SCORE_STORE_KEY = 'kaoyanMath.scores.v1';
+  const SCORES = {};
+  (function loadScores() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(SCORE_STORE_KEY) || 'null');
+      if (!raw || typeof raw !== 'object') return;
+      for (const [k, rec] of Object.entries(raw)) {
+        const m = /^(\d{4})-([123])$/.exec(k);
+        if (!m || !rec || typeof rec !== 'object') continue;
+        const year = Number(m[1]);
+        const subject = Number(m[2]);
+        if (!ALL_YEARS.includes(year)) continue;
+        const qCount = year >= 2021 ? 22 : 23;
+        const clean = { sel: {}, big: {} };
+        if (rec.sel && typeof rec.sel === 'object') {
+          for (const [n, v] of Object.entries(rec.sel)) {
+            const qn = Number(n);
+            if (qn >= 1 && qn <= qCount && qKind(year, qn) !== 'big' && (v === 0 || v === 1)) {
+              clean.sel[qn] = v;
+            }
+          }
+        }
+        if (rec.big && typeof rec.big === 'object') {
+          for (const [n, v] of Object.entries(rec.big)) {
+            const qn = Number(n);
+            if (qn >= 1 && qn <= qCount && qKind(year, qn) === 'big' && Number.isFinite(v)) {
+              clean.big[qn] = Math.min(qMax(year, qn), Math.max(0, Number(v)));
+            }
+          }
+        }
+        if (Object.keys(clean.sel).length || Object.keys(clean.big).length) SCORES[k] = clean;
+      }
+    } catch (e) {
+      // 隐私模式或禁用存储时，仅本次会话有效
+    }
+  })();
+
+  const scoreRec = (year, subject) => SCORES[paperKey(year, subject)] || null;
+  const ensureScoreRec = (year, subject) => {
+    const k = paperKey(year, subject);
+    if (!SCORES[k]) SCORES[k] = { sel: {}, big: {} };
+    return SCORES[k];
+  };
+  const pruneScoreRec = (year, subject) => {
+    const rec = SCORES[paperKey(year, subject)];
+    if (rec && !Object.keys(rec.sel).length && !Object.keys(rec.big).length) {
+      delete SCORES[paperKey(year, subject)];
+    }
+  };
+  const saveScores = () => {
+    try {
+      localStorage.setItem(SCORE_STORE_KEY, JSON.stringify(SCORES));
+    } catch (e) {
+      // 隐私模式或存储已满时忽略，页面仍可继续使用
+    }
+    VIEW_CACHE.clear();
+  };
+  const fmtScore = v => {
+    if (!Number.isFinite(v)) return '—';
+    const r = Math.round(v * 10) / 10;
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  };
+
+  const state = { view: 'm1', year: 2010, level: 'all', keyOnly: false, statsSubject: 1 };
+  // 已渲染页面的 DOM 缓存（按视图 + 年份）；成绩改动后由 saveScores 统一清空
+  const VIEW_CACHE = new Map();
+  const VIEW_CACHE_MAX = 5;
 
   // 已上线年份由 data.js 的清单给出，不必先把各年数据都载进来
   const liveYears = () => LIVE_YEARS;
@@ -87,6 +166,106 @@
     const k = KP_KEY[year] && KP_KEY[year][subject];
     return !!(k && k.includes(n));
   };
+
+  const shortSubj = s => SUBJ[s].replace('数学', '数');
+
+  // 把一年的记录折算成各题型 / 各模块的得分；未标记的题按 0 分计
+  function computePaperScore(year, subject) {
+    const paper = PAPERS[paperKey(year, subject)] || [];
+    const rec = scoreRec(year, subject);
+    const mk = () => ({ score: 0, max: 0, any: false, set: 0, count: 0, correct: 0 });
+    const cats = { choice: mk(), fill: mk(), big: mk(), '高数': mk(), '线代': mk(), '概率': mk() };
+    for (const q of paper) {
+      const kind = qKind(year, q.n);
+      const max = qMax(year, q.n);
+      const isBig = kind === 'big';
+      const raw = rec ? (isBig ? rec.big[q.n] : rec.sel[q.n]) : undefined;
+      const has = raw !== undefined;
+      const got = !has ? 0 : isBig ? Math.min(max, Math.max(0, raw)) : (raw ? max : 0);
+      for (const key of [kind, q.m]) {
+        const c = cats[key];
+        if (!c) continue;
+        c.max += max;
+        c.score += got;
+        c.count++;
+        if (has) { c.any = true; c.set++; }
+        if (!isBig && raw === 1) c.correct++;
+      }
+    }
+    const merge = (a, b) => ({
+      score: a.score + b.score,
+      max: a.max + b.max,
+      any: a.any || b.any,
+      set: a.set + b.set,
+      count: a.count + b.count,
+      correct: a.correct + b.correct
+    });
+    const sel = merge(cats.choice, cats.fill);
+    const total = merge(sel, cats.big);
+    const out = Object.assign({}, cats, { sel, total, year, subject });
+    for (const key of ['choice', 'fill', 'sel', 'big', 'total', '高数', '线代', '概率']) {
+      const c = out[key];
+      c.pct = c.max ? c.score / c.max * 100 : null;
+      c.complete = c.count > 0 && c.set === c.count;
+    }
+    out.hasAny = total.any;
+    return out;
+  }
+
+  // 同一年另一科目里题干完全相同的题（数一/数二/数三经常共用题目）
+  function otherSameQuestions(year, subject, q) {
+    const stem = String(q.x).trim();
+    const out = [];
+    const seen = new Set();
+    for (const s of [1, 2, 3]) {
+      if (s === subject) continue;
+      for (const o of (PAPERS[paperKey(year, s)] || [])) {
+        if (!!o.o !== !!q.o || String(o.x).trim() !== stem) continue;
+        const k = `${s}-${o.n}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ subject: s, q: o });
+      }
+    }
+    return out;
+  }
+
+  function sameQuestionHint(year, subject, q) {
+    const kind = qKind(year, q.n);
+    const parts = otherSameQuestions(year, subject, q).map(o => {
+      const rec = scoreRec(year, o.subject);
+      const val = rec ? (kind === 'big' ? rec.big[o.q.n] : rec.sel[o.q.n]) : undefined;
+      if (val === undefined) return `${shortSubj(o.subject)} ${o.q.n}`;
+      if (kind === 'big') return `${shortSubj(o.subject)} ${o.q.n}（${fmtScore(val)} 分）`;
+      return `${shortSubj(o.subject)} ${o.q.n}（${val === 1 ? '对' : '错'}）`;
+    });
+    return parts.length ? ` · 同题 ${parts.join('、')}` : '';
+  }
+
+  function syncSameScores(year, subject) {
+    let count = 0;
+    const bySource = { 1: 0, 2: 0, 3: 0 };
+    for (const q of (PAPERS[paperKey(year, subject)] || [])) {
+      const kind = qKind(year, q.n);
+      for (const o of otherSameQuestions(year, subject, q)) {
+        const src = scoreRec(year, o.subject);
+        if (!src) continue;
+        const val = kind === 'big' ? src.big[o.q.n] : src.sel[o.q.n];
+        if (val === undefined) continue;
+        const rec = ensureScoreRec(year, subject);
+        if (kind === 'big') rec.big[q.n] = Math.min(qMax(year, q.n), Math.max(0, val));
+        else rec.sel[q.n] = val;
+        count++;
+        bySource[o.subject]++;
+        break; // 数二、数三都有同题时取先找到的一条
+      }
+    }
+    if (count) {
+      pruneScoreRec(year, subject);
+      saveScores();
+    }
+    return { count, bySource };
+  }
 
   const paperPath = (year, subject, kind) => `pdfs/${year}/${year}-m${subject}-${kind}.pdf`;
   const reviewPath = year => `pdfs/${year}/${year}-review.pdf`;
@@ -153,6 +332,109 @@
 
   // 整段都是积分/求和这类带上下限的式子时，嵌套的上下限会很小，整体放大一点才接近试卷排版
   const bigOpt = t => !/[一-鿿]/.test(t) && /\\(?:i{1,3}nt|oint|sum|prod|lim)/.test(t);
+
+  /* ── 我的成绩面板 ── */
+  const attr = s => esc(s).replace(/"/g, '&quot;');
+
+  function scorePanelHTML(year, subject) {
+    const paper = PAPERS[paperKey(year, subject)] || [];
+    const rec = scoreRec(year, subject);
+    const c = computePaperScore(year, subject);
+    const choiceQs = paper.filter(q => qKind(year, q.n) === 'choice');
+    const fillQs = paper.filter(q => qKind(year, q.n) === 'fill');
+    const bigQs = paper.filter(q => qKind(year, q.n) === 'big');
+
+    const chip = q => {
+      const v = rec ? rec.sel[q.n] : undefined;
+      const title = `${q.n} 题 · ${q.m} · ${attr(q.t)}${sameQuestionHint(year, subject, q)}`;
+      return `<button class="qsbtn${v === 0 ? ' is-wrong' : ''}" type="button" data-score-q="${q.n}" aria-pressed="${v === 1}" title="${title}">${q.n}</button>`;
+    };
+
+    const bigRows = bigQs.map(q => {
+      const max = qMax(year, q.n);
+      const v = rec ? rec.big[q.n] : undefined;
+      const copies = otherSameQuestions(year, subject, q).map(o => {
+        const src = scoreRec(year, o.subject);
+        const sv = src ? src.big[o.q.n] : undefined;
+        if (sv === undefined) return '';
+        return `<button class="copybtn" type="button" data-copy-big="${o.subject},${o.q.n},${q.n}" title="复制 ${SUBJ[o.subject]}第 ${o.q.n} 题的得分">同题 ${shortSubj(o.subject)} ${o.q.n} · ${fmtScore(sv)} 分</button>`;
+      }).join('');
+      return `<div class="bigrow">
+        <span class="bigq">${q.n}</span>
+        <span class="bigmeta"><b>${q.m}</b> · ${max} 分</span>
+        <span class="biginput"><input type="number" inputmode="decimal" min="0" max="${max}" step="0.5" placeholder="—" value="${v === undefined ? '' : fmtScore(v)}" data-score-big="${q.n}" aria-label="第 ${q.n} 题得分，满分 ${max} 分"><span class="bigmax">/ ${max}</span></span>
+        ${copies}
+      </div>`;
+    }).join('');
+
+    return `<section class="card scorecard${c.hasAny ? ' has-score' : ''}" data-scorecard data-year="${year}" data-subject="${subject}">
+      <div class="scorecard-head">
+        <div>
+          <div class="rtitle">我的成绩 · ${year} ${SUBJ[subject]}</div>
+          <p class="scmeta">满分 <b>150</b> · 选填 <b>${c.sel.max}</b> 分 + 大题 <b>${c.big.max}</b> 分</p>
+        </div>
+        <div class="scorenow"><span>当前得分</span><b data-score-sum="total">${fmtScore(c.total.score)}</b><i>/ 150</i></div>
+      </div>
+      <div class="scblock">
+        <div class="scblock-head">
+          <h4>选择 · 填空</h4>
+          <span class="scblock-meta">选择 ${c.choice.max} 分 · 填空 ${c.fill.max} 分 · 选填 ${c.sel.max} 分</span>
+          <div class="scbtns">
+            <button class="minibtn" type="button" data-score-all>全选选填</button>
+            <button class="minibtn" type="button" data-score-clear-sel>清空选填</button>
+          </div>
+        </div>
+        <div class="qsgroup"><span class="qsgroup-lab">选择</span><div class="qsgrid">${choiceQs.map(chip).join('')}</div></div>
+        <div class="qsgroup"><span class="qsgroup-lab">填空</span><div class="qsgrid">${fillQs.map(chip).join('')}</div></div>
+        <p class="scsum">做对 <b data-score-correct>${c.sel.correct}</b> / ${c.sel.count} 题（已标记 <b data-score-set="sel">${c.sel.set}</b> / ${c.sel.count}）· 选填 <b data-score-sum="sel">${fmtScore(c.sel.score)}</b> / ${c.sel.max}</p>
+      </div>
+      <div class="scblock">
+        <div class="scblock-head">
+          <h4>解答题</h4>
+          <span class="scblock-meta">${bigQs.length} 题 · ${c.big.max} 分</span>
+        </div>
+        <div class="bigrows">${bigRows}</div>
+        <p class="scsum">已填 <b data-score-set="big">${c.big.set}</b> / ${c.big.count} 题 · 大题 <b data-score-sum="big">${fmtScore(c.big.score)}</b> / ${c.big.max}</p>
+      </div>
+      <div class="scorefoot">
+        <span>点题号标记做对，再点一次标记做错；未标记／未填写的题目按 0 分计。</span>
+        <div class="scorefoot-btns">
+          <button class="minibtn" type="button" data-score-sync>同步同题分数</button>
+          <button class="minibtn danger" type="button" data-score-reset>清空本卷成绩</button>
+        </div>
+        <span class="scorestatus" data-score-status></span>
+      </div>
+    </section>`;
+  }
+
+  function repaintScorecard(card, year, subject) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = scorePanelHTML(year, subject);
+    const fresh = tmp.firstElementChild;
+    if (!fresh) return card;
+    card.replaceWith(fresh);
+    return fresh;
+  }
+
+  function setScoreStatus(card, msg) {
+    const el = card && card.querySelector('[data-score-status]');
+    if (el) el.textContent = msg;
+  }
+
+  function updateScoreSums(card, year, subject) {
+    const c = computePaperScore(year, subject);
+    const put = (sel, val) => {
+      const el = card.querySelector(sel);
+      if (el) el.textContent = val;
+    };
+    put('[data-score-set="big"]', c.big.set);
+    put('[data-score-sum="big"]', fmtScore(c.big.score));
+    put('[data-score-sum="total"]', fmtScore(c.total.score));
+    put('[data-score-set="sel"]', c.sel.set);
+    put('[data-score-sum="sel"]', fmtScore(c.sel.score));
+    put('[data-score-correct]', c.sel.correct);
+    card.classList.toggle('has-score', c.hasAny);
+  }
 
   /* ── 题目卡 ── */
   function renderCard(q, subject, year, opts) {
@@ -322,6 +604,7 @@
         </div>
       </header>
       <div class="scorestrip">${scores}</div>
+      <section class="section">${scorePanelHTML(year, subject)}</section>
       <section class="section">${reviewCard}</section>
       <section class="section">${distCard}</section>
       <section class="section">
@@ -524,6 +807,325 @@
       </section>`;
   }
 
+  /* ── 成绩统计 ── */
+  const TYPE_SERIES = [
+    { key: 'sel', label: '选填', color: 'var(--series-1)' },
+    { key: 'big', label: '大题', color: 'var(--series-2)' },
+    { key: 'total', label: '总分', color: 'var(--series-3)' }
+  ];
+  const MODULE_SERIES = [
+    { key: '高数', label: '高数', color: 'var(--series-1)' },
+    { key: '线代', label: '线代', color: 'var(--series-2)' },
+    { key: '概率', label: '概率', color: 'var(--series-3)' }
+  ];
+  const STAT_DEFS = [
+    { key: 'total', label: '总分' },
+    { key: 'choice', label: '选择' },
+    { key: 'fill', label: '填空' },
+    { key: 'sel', label: '选填' },
+    { key: 'big', label: '大题' },
+    { key: '高数', label: '高数' },
+    { key: '线代', label: '线代' },
+    { key: '概率', label: '概率' }
+  ];
+
+  let STATS_CHARTS = [];
+  const statsChartWidth = () => Math.max(280, Math.min(820, Math.floor(appEl.clientWidth || 640)));
+
+  function statsCounts() {
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    for (const k of Object.keys(SCORES)) {
+      const s = Number(k.split('-')[1]);
+      if (counts[s] !== undefined) counts[s]++;
+    }
+    return counts;
+  }
+
+  function statsRows(subject) {
+    return ALL_YEARS
+      .filter(y => LOADED_YEARS.has(y) && scoreRec(y, subject))
+      .map(y => computePaperScore(y, subject))
+      .filter(r => r.hasAny)
+      .sort((a, b) => b.year - a.year);
+  }
+
+  function statCardHTML(def, rows, subject) {
+    if (def.key === '概率' && subject === 2) {
+      return `<div class="stat">
+        <span class="stat-label">概率</span>
+        <span class="stat-value">不考</span>
+        <span class="stat-sub">数学二不考该模块</span>
+      </div>`;
+    }
+    const list = def.key === 'total'
+      ? rows.filter(r => r.sel.any && r.big.any)
+      : rows.filter(r => r[def.key] && r[def.key].any && r[def.key].max > 0);
+    const avg = list.length ? list.reduce((s, r) => s + r[def.key].score, 0) / list.length : null;
+    const rate = list.length ? list.reduce((s, r) => s + r[def.key].pct, 0) / list.length : null;
+    const maxes = [...new Set(list.map(r => r[def.key].max))].sort((a, b) => a - b);
+    const maxText = def.key === 'total'
+      ? '150'
+      : !maxes.length ? '—' : maxes.length === 1 ? String(maxes[0]) : `${maxes[0]}—${maxes[maxes.length - 1]}`;
+    const value = avg === null ? '—'
+      : def.key === 'total' ? `${fmtScore(avg)}<small>/ 150</small>` : `${fmtScore(avg)}<small>分</small>`;
+    const sub = avg === null
+      ? `满分 ${maxText}<br>还没有记录`
+      : `得分率 ${Math.round(rate)}% · 满分 ${maxText}<br>记录 ${list.length} 年`;
+    return `<div class="stat">
+      <span class="stat-label">${def.label}</span>
+      <span class="stat-value">${value}</span>
+      <span class="stat-sub">${sub}</span>
+    </div>`;
+  }
+
+  // 折线图只比较得分率：不同年份满分不同，直接比原始分没有意义
+  function chartValue(row, key) {
+    if (key === 'total') return row.sel.any && row.big.any ? row.total : null;
+    const c = row[key];
+    return c && c.any && c.max > 0 ? c : null;
+  }
+
+  function chartPoints(rows, series) {
+    return rows
+      .slice()
+      .sort((a, b) => a.year - b.year)
+      .map(r => {
+        const vals = {};
+        let any = false;
+        for (const s of series) {
+          const c = chartValue(r, s.key);
+          vals[s.key] = c ? { pct: c.pct, score: c.score, max: c.max } : null;
+          if (c) any = true;
+        }
+        return any ? { year: r.year, vals } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function buildChart(series, pts, width) {
+    const active = series.filter(s => pts.some(p => p.vals[s.key]));
+    if (!pts.length || !active.length) return null;
+
+    const height = 232;
+    const padL = 32, padR = 64, padT = 16, padB = 28;
+    const plotW = Math.max(40, width - padL - padR);
+    const plotH = height - padT - padB;
+    const n = pts.length;
+    const xs = pts.map((_, i) => n === 1 ? padL + plotW / 2 : padL + plotW * i / (n - 1));
+    const yOf = pct => padT + (1 - pct / 100) * plotH;
+
+    let grid = '';
+    for (const v of [0, 25, 50, 75, 100]) {
+      const y = yOf(v);
+      grid += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}"/>`;
+      grid += `<text class="tick" x="${padL - 6}" y="${y + 3}" text-anchor="end">${v}%</text>`;
+    }
+
+    const stepPx = n > 1 ? plotW / (n - 1) : plotW;
+    const dense = stepPx < 30;
+    const every = Math.max(1, Math.ceil(30 / Math.max(stepPx, 1)));
+    let xLabels = '';
+    pts.forEach((p, i) => {
+      if (i % every !== 0 && i !== n - 1) return;
+      if (i !== n - 1 && n - 1 - i < every && n > 3) return;
+      const text = dense ? String(p.year).slice(2) : String(p.year);
+      xLabels += `<text class="tick" x="${xs[i].toFixed(1)}" y="${height - 8}" text-anchor="middle">${text}</text>`;
+    });
+
+    let paths = '', dots = '';
+    for (const s of active) {
+      let d = '', pen = false;
+      pts.forEach((p, i) => {
+        const v = p.vals[s.key];
+        if (!v) { pen = false; return; }
+        const y = yOf(v.pct);
+        d += `${pen ? 'L' : 'M'}${xs[i].toFixed(1)} ${y.toFixed(1)}`;
+        pen = true;
+        dots += `<circle class="dot" cx="${xs[i].toFixed(1)}" cy="${y.toFixed(1)}" r="${dense ? 2.2 : 2.8}" fill="${s.color}"><title>${p.year} 年 ${s.label} ${Math.round(v.pct)}%</title></circle>`;
+      });
+      if (d) paths += `<path class="series-line" d="${d}" stroke="${s.color}"/>`;
+    }
+
+    const ends = active.map(s => {
+      for (let i = pts.length - 1; i >= 0; i--) {
+        if (pts[i].vals[s.key]) return { s, y: yOf(pts[i].vals[s.key].pct) };
+      }
+      return null;
+    }).filter(Boolean).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) {
+      if (ends[i].y - ends[i - 1].y < 11) ends[i].y = ends[i - 1].y + 11;
+    }
+    const endLabels = ends.map(e => {
+      const y = Math.min(padT + plotH, Math.max(padT, e.y));
+      return `<text class="end-label" x="${padL + plotW + 7}" y="${(y + 3).toFixed(1)}">${e.s.label}</text>`;
+    }).join('');
+
+    const crosshair = `<line class="crosshair" x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}"/>`;
+    const svg = `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="历年得分率折线图">${grid}${xLabels}${crosshair}${paths}${dots}${endLabels}</svg>`;
+    return { svg, data: { pts, xs, width, active } };
+  }
+
+  function chartTipHTML(p, active) {
+    const rows = active.map(s => {
+      const v = p.vals[s.key];
+      return `<div class="tip-row"><span><i style="background:${s.color}"></i>${s.label}</span>${
+        v ? `<b>${Math.round(v.pct)}%<em> ${fmtScore(v.score)}/${v.max}</em></b>` : '<b class="empty">—</b>'
+      }</div>`;
+    }).join('');
+    return `<div class="tip-year">${p.year} 年</div>${rows}`;
+  }
+
+  function bindChart(wrap, data) {
+    const svg = wrap.querySelector('.chart');
+    const tip = wrap.querySelector('.chart-tip');
+    if (!svg || !tip) return;
+
+    const show = clientX => {
+      const rect = svg.getBoundingClientRect();
+      if (!rect.width) return;
+      const scale = rect.width / data.width;
+      const cx = (clientX - rect.left) / scale;
+      const last = data.pts.length - 1;
+      let idx = 0;
+      if (last > 0) {
+        const step = (data.xs[last] - data.xs[0]) / last;
+        idx = Math.round((cx - data.xs[0]) / (step || 1));
+        idx = Math.max(0, Math.min(last, idx));
+      }
+      const x = data.xs[idx];
+      const cross = svg.querySelector('.crosshair');
+      if (cross) {
+        cross.setAttribute('x1', x);
+        cross.setAttribute('x2', x);
+        cross.style.opacity = '1';
+      }
+      tip.innerHTML = chartTipHTML(data.pts[idx], data.active);
+      tip.hidden = false;
+      const tipW = tip.offsetWidth;
+      let left = x * scale + 12;
+      if (left + tipW > rect.width - 4) left = x * scale - tipW - 12;
+      if (left < 4) left = 4;
+      tip.style.left = `${left}px`;
+      tip.style.top = '8px';
+    };
+
+    const hide = () => {
+      tip.hidden = true;
+      const cross = svg.querySelector('.crosshair');
+      if (cross) cross.style.opacity = '0';
+    };
+
+    wrap.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'touch') show(e.clientX);
+    });
+    wrap.addEventListener('pointerdown', e => show(e.clientX));
+    wrap.addEventListener('pointerleave', e => {
+      if (e.pointerType !== 'touch') hide();
+    });
+  }
+
+  function bindStatsCharts() {
+    if (!STATS_CHARTS.length) return;
+    appEl.querySelectorAll('.chartwrap[data-chart]').forEach(wrap => {
+      const data = STATS_CHARTS[Number(wrap.dataset.chart)];
+      if (data) bindChart(wrap, data);
+    });
+  }
+
+  function yearCardHTML(r) {
+    const totalReady = r.sel.any && r.big.any;
+    const defs = [
+      ['choice', '选择', r.choice],
+      ['fill', '填空', r.fill],
+      ['sel', '选填', r.sel],
+      ['big', '大题', r.big],
+      ['total', '总分', r.total],
+      ['高数', '高数', r['高数']],
+      ['线代', '线代', r['线代']],
+      ['概率', '概率', r['概率']]
+    ];
+    const rows = defs.filter(([key, , c]) => c && c.max > 0).map(([key, label, c]) => {
+      const ready = key === 'total' ? totalReady : c.any;
+      const pct = ready ? Math.min(100, c.score / c.max * 100) : 0;
+      const score = ready ? `${fmtScore(c.score)}<i>/ ${c.max}</i>` : `—<i>/ ${c.max}</i>`;
+      const strong = key === 'sel' || key === 'big' || key === 'total';
+      return `<div class="scorerow${strong ? ' strong' : ''}">
+        <span class="scorerow-lab">${label}</span>
+        <span class="smeter"><i style="width:${pct.toFixed(1)}%"></i></span>
+        <span class="scorerow-score${ready ? '' : ' empty'}">${score}</span>
+      </div>`;
+    }).join('');
+
+    const totalText = totalReady ? `${fmtScore(r.total.score)} / 150 · ${Math.round(r.total.pct)}%` : '总分待补全';
+    return `<section class="card yearcard">
+      <div class="sumsec-head">
+        <span class="sumsec-title">${r.year} 年 · ${shortSubj(r.subject)}</span>
+        <span class="yearcard-actions">
+          <span class="sumsec-avg">${totalText}</span>
+          <button class="minibtn yearopen" type="button" data-stats-open="${r.year},${r.subject}">查看试卷</button>
+        </span>
+      </div>
+      <div class="scorerows">${rows}</div>
+    </section>`;
+  }
+
+  function statsHTML() {
+    STATS_CHARTS = [];
+    const subject = state.statsSubject;
+    const rows = statsRows(subject);
+    const counts = statsCounts();
+    const seg = [1, 2, 3].map(s =>
+      `<button class="segbtn" type="button" data-stats-subj="${s}" aria-pressed="${s === subject}">${SUBJ[s]}<span class="cnt">${counts[s]}</span></button>`
+    ).join('');
+    const header = `<header class="yearhero statshead">
+      <div>
+        <p class="kicker">成绩统计</p>
+        <h2>我的成绩统计</h2>
+        <p class="meta">${SUBJ[subject]} · ${rows.length
+          ? `已记录 <b>${rows.length}</b> 个年份 · 平均分 / 得分率（不同年份满分不同）`
+          : '还没有成绩记录' } · 数据保存在本机浏览器</p>
+      </div>
+      <div class="segmented" role="group" aria-label="选择科目">${seg}</div>
+    </header>`;
+
+    if (!rows.length) {
+      return `${header}
+        <div class="card statsempty">
+          <p class="big">还没有 ${SUBJ[subject]} 的成绩记录</p>
+          <p>回到真题页，在每年的「我的成绩」面板里标记选填对错、填写大题分数，这里会自动汇总历年成绩。</p>
+          <button class="btn primary" type="button" data-stats-start="${subject}">去记录成绩</button>
+        </div>`;
+    }
+
+    const cards = STAT_DEFS.map(def => statCardHTML(def, rows, subject)).join('');
+    const width = statsChartWidth();
+
+    const chartSection = (title, series, note) => {
+      const built = buildChart(series, chartPoints(rows, series), width);
+      if (!built) return '';
+      const idx = STATS_CHARTS.length;
+      STATS_CHARTS.push(built.data);
+      const legend = built.data.active
+        .map(s => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join('');
+      return `<section class="sumsec">
+        <div class="sumsec-head"><span class="sumsec-title">${title}</span><span class="sumsec-avg">${built.data.pts.length} 个年份 · 得分率</span></div>
+        <div class="legend">${legend}</div>
+        <div class="chartwrap" data-chart="${idx}">${built.svg}<div class="chart-tip" hidden></div></div>
+        <p class="sumnote">${note}</p>
+      </section>`;
+    };
+
+    const charts = chartSection('题型趋势', TYPE_SERIES, '未标记的选填和未填写的大题按 0 分计；总分只在该卷选填、大题都有记录时绘出。')
+      + chartSection('模块趋势', MODULE_SERIES, '按题目的考点模块归类；数二不考概率，因此不会出现在图里。');
+
+    const detail = `<section class="sumsec">
+        <div class="sumsec-head"><span class="sumsec-title">逐年明细</span><span class="sumsec-avg">按年份倒序</span></div>
+        <p class="sumnote">每一行都是「已得 / 满分」。选填和大题优先看；总分需要两部分都有记录才计算。</p>
+      </section>` + rows.map(yearCardHTML).join('');
+
+    return `${header}<div class="stats">${cards}</div>${charts}${detail}`;
+  }
+
   /* ── 错题本导出 PDF：另建一份只用于打印的版式，交给浏览器「存储为 PDF」 ── */
   // 打印用的题目卡片；practice 版只留题目和答题空白，不带答案与解析
   function printCard(q, n, { label = '', practice = false, big = false } = {}) {
@@ -651,11 +1253,11 @@
 
   /* ── 主渲染 ── */
   // 复用已渲染好的 DOM 节点：切回同一年时既不重建页面，也不重排公式
-  const VIEW_CACHE = new Map();
-  const VIEW_CACHE_MAX = 5;
   let renderToken = 0;
 
-  const cacheKeyOf = () => `${state.view}|${state.year}`;
+  const cacheKeyOf = () => state.view === 'stats'
+    ? `stats|${state.statsSubject}|${statsChartWidth()}`
+    : `${state.view}|${state.year}`;
 
   // 难度 / 重点筛选只改显隐，不重建页面
   function applyFilter() {
@@ -683,8 +1285,12 @@
     });
   }
 
-  // 错题本会跨年份取题，涉及的年份都要先载入
+  // 错题本 / 成绩统计会跨年份取题，涉及的年份都要先载入
   function neededYears() {
+    if (state.view === 'stats') {
+      const years = [...new Set(Object.keys(SCORES).map(k => Number(k.split('-')[0])))];
+      return years.filter(y => ALL_YEARS.includes(y));
+    }
     if (state.view !== 'wrong') return [state.year];
     const years = [...new Set([...WRONG].map(k => Number(k.split('-')[0])))];
     return years.length ? years.filter(y => ALL_YEARS.includes(y)) : [state.year];
@@ -711,7 +1317,9 @@
   function renderNow() {
     document.documentElement.dataset.view = state.view;
     try {
-      history.replaceState(null, '', `?view=${state.view}&year=${state.year}`);
+      const qs = new URLSearchParams({ view: state.view, year: String(state.year) });
+      if (state.view === 'stats') qs.set('subj', String(state.statsSubject));
+      history.replaceState(null, '', `?${qs}`);
     } catch (e) { /* file:// 下部分浏览器不允许改写地址 */ }
 
     const cacheKey = cacheKeyOf();
@@ -725,6 +1333,7 @@
       if (subject) appEl.innerHTML = subjectHTML(subject);
       else if (state.view === 'key') appEl.innerHTML = keyHTML();
       else if (state.view === 'wrong') appEl.innerHTML = wrongHTML();
+      else if (state.view === 'stats') { appEl.innerHTML = statsHTML(); bindStatsCharts(); }
       else appEl.innerHTML = suppHTML();
       renderMath();
       VIEW_CACHE.set(cacheKey, [...appEl.childNodes]);
@@ -798,6 +1407,101 @@
 
   /* ── 事件 ── */
   appEl.addEventListener('click', e => {
+    const scoreQ = e.target.closest('[data-score-q]');
+    if (scoreQ) {
+      const card = scoreQ.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const n = Number(scoreQ.dataset.scoreQ);
+      const rec = ensureScoreRec(year, subject);
+      const cur = rec.sel[n];
+      if (cur === 1) rec.sel[n] = 0;
+      else if (cur === 0) delete rec.sel[n];
+      else rec.sel[n] = 1;
+      pruneScoreRec(year, subject);
+      saveScores();
+      repaintScorecard(card, year, subject);
+      return;
+    }
+
+    const scoreAll = e.target.closest('[data-score-all]');
+    if (scoreAll) {
+      const card = scoreAll.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const rec = ensureScoreRec(year, subject);
+      for (const q of (PAPERS[paperKey(year, subject)] || [])) {
+        if (qKind(year, q.n) !== 'big') rec.sel[q.n] = 1;
+      }
+      saveScores();
+      const fresh = repaintScorecard(card, year, subject);
+      setScoreStatus(fresh, '已全选选填；点做错的题号可改为做错，再点一次取消标记。');
+      return;
+    }
+
+    const scoreClearSel = e.target.closest('[data-score-clear-sel]');
+    if (scoreClearSel) {
+      const card = scoreClearSel.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const rec = ensureScoreRec(year, subject);
+      rec.sel = {};
+      pruneScoreRec(year, subject);
+      saveScores();
+      repaintScorecard(card, year, subject);
+      return;
+    }
+
+    const scoreCopy = e.target.closest('[data-copy-big]');
+    if (scoreCopy) {
+      const card = scoreCopy.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const [srcSubject, srcN, tgtN] = scoreCopy.dataset.copyBig.split(',').map(Number);
+      const src = scoreRec(year, srcSubject);
+      const val = src ? src.big[srcN] : undefined;
+      if (val === undefined) return;
+      const rec = ensureScoreRec(year, subject);
+      rec.big[tgtN] = Math.min(qMax(year, tgtN), Math.max(0, val));
+      saveScores();
+      const fresh = repaintScorecard(card, year, subject);
+      setScoreStatus(fresh, `已从 ${SUBJ[srcSubject]} 第 ${srcN} 题复制 ${fmtScore(val)} 分。`);
+      return;
+    }
+
+    const scoreSync = e.target.closest('[data-score-sync]');
+    if (scoreSync) {
+      const card = scoreSync.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      const res = syncSameScores(year, subject);
+      const fresh = repaintScorecard(card, year, subject);
+      setScoreStatus(fresh, res.count
+        ? `已从其他科目同步 ${res.count} 道同题成绩。`
+        : '没有找到其他科目里已记录的同题成绩。');
+      return;
+    }
+
+    const scoreReset = e.target.closest('[data-score-reset]');
+    if (scoreReset) {
+      const card = scoreReset.closest('[data-scorecard]');
+      if (!card) return;
+      const year = Number(card.dataset.year);
+      const subject = Number(card.dataset.subject);
+      if (!scoreRec(year, subject)) return;
+      if (!window.confirm(`清空 ${year} 年${SUBJ[subject]}的记录？此操作不可撤销。`)) return;
+      delete SCORES[paperKey(year, subject)];
+      saveScores();
+      const fresh = repaintScorecard(card, year, subject);
+      setScoreStatus(fresh, '已清空本卷成绩。');
+      return;
+    }
+
     const wb = e.target.closest('[data-wrong]');
     if (wb) {
       const k = wb.dataset.wrong;
@@ -870,12 +1574,88 @@
       e.preventDefault();
       const [y, s, n] = jump.dataset.jump.split(',').map(Number);
       jumpTo(y, s, n);
+      return;
     }
+
+    const statsSeg = e.target.closest('[data-stats-subj]');
+    if (statsSeg) {
+      const s = Number(statsSeg.dataset.statsSubj);
+      if (s === state.statsSubject) return;
+      state.statsSubject = s;
+      render();
+      scrollTop();
+      return;
+    }
+
+    const statsOpen = e.target.closest('[data-stats-open]');
+    if (statsOpen) {
+      const [y, s] = statsOpen.dataset.statsOpen.split(',').map(Number);
+      state.view = `m${s}`;
+      state.year = y;
+      state.level = 'all';
+      state.keyOnly = false;
+      render();
+      scrollTop();
+      return;
+    }
+
+    const statsStart = e.target.closest('[data-stats-start]');
+    if (statsStart) {
+      const s = Number(statsStart.dataset.statsStart);
+      state.statsSubject = s;
+      state.view = `m${s}`;
+      state.level = 'all';
+      state.keyOnly = false;
+      render();
+      scrollTop();
+    }
+  });
+
+  appEl.addEventListener('input', e => {
+    const inp = e.target.closest('[data-score-big]');
+    if (!inp) return;
+    const card = inp.closest('[data-scorecard]');
+    if (!card) return;
+    const year = Number(card.dataset.year);
+    const subject = Number(card.dataset.subject);
+    const n = Number(inp.dataset.scoreBig);
+    const raw = inp.value.trim();
+    const rec = ensureScoreRec(year, subject);
+    if (raw === '') {
+      delete rec.big[n];
+    } else {
+      const v = Number(raw);
+      if (!Number.isFinite(v)) return;
+      const clamped = Math.min(qMax(year, n), Math.max(0, v));
+      rec.big[n] = clamped;
+      if (clamped !== v) inp.value = fmtScore(clamped);
+    }
+    pruneScoreRec(year, subject);
+    saveScores();
+    updateScoreSums(card, year, subject);
+  });
+
+  // 失焦时把越界或只写了一半的数字回填成实际存下的分数
+  appEl.addEventListener('focusout', e => {
+    const inp = e.target.closest('[data-score-big]');
+    if (!inp) return;
+    const card = inp.closest('[data-scorecard]');
+    if (!card) return;
+    const year = Number(card.dataset.year);
+    const subject = Number(card.dataset.subject);
+    const n = Number(inp.dataset.scoreBig);
+    const rec = scoreRec(year, subject);
+    const v = rec ? rec.big[n] : undefined;
+    inp.value = v === undefined ? '' : fmtScore(v);
   });
 
   modulesEl.addEventListener('click', e => {
     const btn = e.target.closest('.mod');
     if (!btn) return;
+    if (btn.dataset.view === 'stats') {
+      const cur = SUBJ_VIEW[state.view];
+      if (cur) state.statsSubject = cur;
+    }
     state.view = btn.dataset.view;
     render();
     scrollTop();
@@ -889,6 +1669,17 @@
     scrollTop();
   });
 
+  // 统计图表按容器宽度绘制，窗口尺寸变化后重画一次
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    if (state.view !== 'stats') return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      VIEW_CACHE.delete(cacheKeyOf());
+      render();
+    }, 180);
+  });
+
   document.getElementById('pdfClose').addEventListener('click', closePdf);
   sheetEl.addEventListener('click', e => {
     if (e.target === sheetEl) closePdf();
@@ -900,7 +1691,9 @@
   /* ── 启动 ── */
   const params = new URLSearchParams(location.search);
   const pv = params.get('view');
-  if (pv && ['m1', 'm2', 'm3', 'key', 'supp', 'wrong'].includes(pv)) state.view = pv;
+  if (pv && ['m1', 'm2', 'm3', 'key', 'supp', 'wrong', 'stats'].includes(pv)) state.view = pv;
+  const ps = Number(params.get('subj'));
+  if (ps >= 1 && ps <= 3) state.statsSubject = ps;
   const py = Number(params.get('year'));
   const live = liveYears();
   if (live.includes(py)) state.year = py;
