@@ -784,7 +784,7 @@
         <p>在上面输入模拟卷名称并添加，记录选择、填空和大题分数，这里会自动汇总平均分与各模块得分。</p>
       </div>`;
     }
-    const totals = rows.filter(r => r.sel.any && r.big.any);
+    const totals = rows.filter(r => r.total.complete);
     const avg = (list, fn) => list.length ? list.reduce((s, r) => s + fn(r), 0) / list.length : null;
     const avgTotal = avg(totals, r => r.total.score);
     const rateTotal = avg(totals, r => r.total.pct);
@@ -799,16 +799,17 @@
         html += mockStatCard('概率', '不考', '数学二不考该模块');
         continue;
       }
-      const list = rows.filter(r => r[key] && r[key].any && r[key].max > 0);
+      const list = rows.filter(r => r[key] && r[key].complete && r[key].max > 0);
       const a = avg(list, r => r[key].score);
       const p = avg(list, r => r[key].pct);
       const max = rows[0][key].max;
       const sub = a === null
-        ? `满分 ${max} · 还没有记录`
+        ? `满分 ${max} · 还没有完整记录`
         : `得分率 ${Math.round(p)}% · 满分 ${max} · ${list.length} 套`;
       html += mockStatCard(label, a === null ? '—' : `${fmtScore(a)}<small>分</small>`, sub);
     }
-    return `<div class="stats mockstats">${html}</div>`;
+    return `<div class="stats mockstats">${html}</div>
+      <p class="sumnote">只有某一项的全部题目都记录后，才会计入对应的平均分；未填完的模拟卷不参与统计。</p>`;
   }
 
   function mockFormHTML(subject) {
@@ -1271,11 +1272,18 @@
   let STATS_CHARTS = [];
   const statsChartWidth = () => Math.max(280, Math.min(820, Math.floor(appEl.clientWidth || 640)));
 
+  // 一项统计只有在对应的题目全部记录后才完整，未填完的不参与平均分和走势
+  const STAT_KEYS = ['choice', 'fill', 'sel', 'big', 'total', '高数', '线代', '概率'];
+  const completePart = c => !!(c && c.max > 0 && c.complete);
+  const hasCompletePart = r => STAT_KEYS.some(k => completePart(r[k]));
+
   function statsCounts() {
     const counts = { 1: 0, 2: 0, 3: 0 };
     for (const [k, rec] of Object.entries(SCORES)) {
-      const s = Number(k.split('-')[1]);
-      if (counts[s] !== undefined && rec.touched !== false) counts[s]++;
+      const [y, s] = k.split('-').map(Number);
+      if (counts[s] === undefined || rec.touched === false) continue;
+      if (!LOADED_YEARS.has(y)) continue;
+      if (hasCompletePart(computePaperScore(y, s))) counts[s]++;
     }
     return counts;
   }
@@ -1288,6 +1296,36 @@
       .sort((a, b) => b.year - a.year);
   }
 
+  // 2021 年改革后题型与分值都变了，均分按改革前后分开统计
+  const ERA_DEFS = [
+    { label: '21年前', from: 2010, to: 2020 },
+    { label: '21年起', from: 2021, to: 9999 }
+  ];
+
+  function eraStats(rows, key, era) {
+    const list = rows.filter(r => r.year >= era.from && r.year <= era.to && completePart(r[key]));
+    const avg = list.length ? list.reduce((s, r) => s + r[key].score, 0) / list.length : null;
+    const rate = list.length ? list.reduce((s, r) => s + r[key].pct, 0) / list.length : null;
+    const maxes = [...new Set(list.map(r => r[key].max))].sort((a, b) => a - b);
+    const maxText = !maxes.length ? '—'
+      : maxes.length === 1 ? String(maxes[0]) : `${maxes[0]}—${maxes[maxes.length - 1]}`;
+    return { avg, rate, maxText, count: list.length };
+  }
+
+  function eraRowHTML(era, s, total) {
+    const value = s.avg === null ? '—'
+      : total ? `${fmtScore(s.avg)}<small>/ 150</small>` : `${fmtScore(s.avg)}<small>分</small>`;
+    const maxText = total ? '150' : s.maxText;
+    const sub = s.avg === null
+      ? `满分 ${maxText} · 还没有完整记录`
+      : `得分率 ${Math.round(s.rate)}% · 满分 ${maxText} · ${s.count} 年`;
+    return `<div class="staterow">
+      <span class="staterow-era">${era.label}</span>
+      <span class="staterow-val">${value}</span>
+      <span class="staterow-sub">${sub}</span>
+    </div>`;
+  }
+
   function statCardHTML(def, rows, subject) {
     if (def.key === '概率' && subject === 2) {
       return `<div class="stat">
@@ -1296,32 +1334,33 @@
         <span class="stat-sub">数学二不考该模块</span>
       </div>`;
     }
-    const list = def.key === 'total'
-      ? rows.filter(r => r.sel.any && r.big.any)
-      : rows.filter(r => r[def.key] && r[def.key].any && r[def.key].max > 0);
-    const avg = list.length ? list.reduce((s, r) => s + r[def.key].score, 0) / list.length : null;
-    const rate = list.length ? list.reduce((s, r) => s + r[def.key].pct, 0) / list.length : null;
-    const maxes = [...new Set(list.map(r => r[def.key].max))].sort((a, b) => a - b);
-    const maxText = def.key === 'total'
-      ? '150'
-      : !maxes.length ? '—' : maxes.length === 1 ? String(maxes[0]) : `${maxes[0]}—${maxes[maxes.length - 1]}`;
-    const value = avg === null ? '—'
-      : def.key === 'total' ? `${fmtScore(avg)}<small>/ 150</small>` : `${fmtScore(avg)}<small>分</small>`;
-    const sub = avg === null
-      ? `满分 ${maxText}<br>还没有记录`
-      : `得分率 ${Math.round(rate)}% · 满分 ${maxText}<br>记录 ${list.length} 年`;
-    return `<div class="stat">
+    const eras = ERA_DEFS.map(era => [era, eraStats(rows, def.key, era)]);
+    if (def.key === 'total') {
+      // 总分一直是 150 分，保留全部年份的均分，同时列出改革前后两段
+      const list = rows.filter(r => completePart(r.total));
+      const avg = list.length ? list.reduce((s, r) => s + r.total.score, 0) / list.length : null;
+      const rate = list.length ? list.reduce((s, r) => s + r.total.pct, 0) / list.length : null;
+      const sub = avg === null
+        ? '满分 150 · 全部年份还没有完整记录'
+        : `全部 ${list.length} 年 · 得分率 ${Math.round(rate)}% · 满分 150`;
+      return `<div class="stat stat--total">
+        <span class="stat-label">总分</span>
+        <span class="stat-value">${avg === null ? '—' : `${fmtScore(avg)}<small>/ 150</small>`}</span>
+        <span class="stat-sub">${sub}</span>
+        <div class="statsplits">${eras.map(([era, s]) => eraRowHTML(era, s, true)).join('')}</div>
+      </div>`;
+    }
+    return `<div class="stat stat--split">
       <span class="stat-label">${def.label}</span>
-      <span class="stat-value">${value}</span>
-      <span class="stat-sub">${sub}</span>
+      <div class="statsplits">${eras.map(([era, s]) => eraRowHTML(era, s, false)).join('')}</div>
     </div>`;
   }
 
   // 折线图只比较得分率：不同年份满分不同，直接比原始分没有意义
   function chartValue(row, key) {
-    if (key === 'total') return row.sel.any && row.big.any ? row.total : null;
+    if (key === 'total') return completePart(row.total) ? row.total : null;
     const c = row[key];
-    return c && c.any && c.max > 0 ? c : null;
+    return completePart(c) ? c : null;
   }
 
   function chartPoints(rows, series) {
@@ -1472,7 +1511,7 @@
   }
 
   function yearCardHTML(r) {
-    const totalReady = r.sel.any && r.big.any;
+    const totalReady = completePart(r.total);
     const defs = [
       ['choice', '选择', r.choice],
       ['fill', '填空', r.fill],
@@ -1483,19 +1522,19 @@
       ['线代', '线代', r['线代']],
       ['概率', '概率', r['概率']]
     ];
-    const rows = defs.filter(([key, , c]) => c && c.max > 0).map(([key, label, c]) => {
-      const ready = key === 'total' ? totalReady : c.any;
-      const pct = ready ? Math.min(100, c.score / c.max * 100) : 0;
-      const score = ready ? `${fmtScore(c.score)}<i>/ ${c.max}</i>` : `—<i>/ ${c.max}</i>`;
+    // 只展示已经全部记录完的题型/模块；未填完的不参与统计
+    const rows = defs.filter(([, , c]) => completePart(c)).map(([key, label, c]) => {
+      const pct = Math.min(100, c.score / c.max * 100);
+      const score = `${fmtScore(c.score)}<i>/ ${c.max}</i>`;
       const strong = key === 'sel' || key === 'big' || key === 'total';
       return `<div class="scorerow${strong ? ' strong' : ''}">
         <span class="scorerow-lab">${label}</span>
         <span class="smeter"><i style="width:${pct.toFixed(1)}%"></i></span>
-        <span class="scorerow-score${ready ? '' : ' empty'}">${score}</span>
+        <span class="scorerow-score">${score}</span>
       </div>`;
     }).join('');
 
-    const totalText = totalReady ? `${fmtScore(r.total.score)} / 150 · ${Math.round(r.total.pct)}%` : '总分待补全';
+    const totalText = totalReady ? `${fmtScore(r.total.score)} / 150 · ${Math.round(r.total.pct)}%` : '总分未填完，不计入统计';
     return `<section class="card yearcard">
       <div class="sumsec-head">
         <span class="sumsec-title">${r.year} 年 · ${shortSubj(r.subject)}</span>
@@ -1511,7 +1550,9 @@
   function statsHTML() {
     STATS_CHARTS = [];
     const subject = state.statsSubject;
-    const rows = statsRows(subject);
+    const allRows = statsRows(subject);
+    // 只有某一项全部填完的年份才进入统计；只填了一部分的记录先不计入
+    const rows = allRows.filter(hasCompletePart);
     const counts = statsCounts();
     const seg = [1, 2, 3].map(s =>
       `<button class="segbtn" type="button" data-stats-subj="${s}" aria-pressed="${s === subject}">${SUBJ[s]}<span class="cnt">${counts[s]}</span></button>`
@@ -1521,17 +1562,20 @@
         <p class="kicker">成绩统计</p>
         <h2>我的成绩统计</h2>
         <p class="meta">${SUBJ[subject]} · ${rows.length
-          ? `已记录 <b>${rows.length}</b> 个年份 · 平均分 / 得分率（不同年份满分不同）`
-          : '还没有成绩记录' } · 数据保存在本机浏览器</p>
+          ? `有 <b>${rows.length}</b> 个年份包含填写完整的项目 · 按 2021 年改革前后分段统计`
+          : allRows.length ? '已有成绩记录，但还没有填写完整的项目' : '还没有成绩记录' } · 数据保存在本机浏览器</p>
       </div>
       <div class="segmented" role="group" aria-label="选择科目">${seg}</div>
     </header>`;
 
     if (!rows.length) {
+      const partial = allRows.length > 0;
       return `${header}
         <div class="card statsempty">
-          <p class="big">还没有 ${SUBJ[subject]} 的成绩记录</p>
-          <p>回到真题页，在每年的「我的成绩」面板里标记选填对错、填写大题分数，这里会自动汇总历年成绩。</p>
+          <p class="big">${partial ? `还没有填写完整的 ${SUBJ[subject]} 项目` : `还没有 ${SUBJ[subject]} 的成绩记录`}</p>
+          <p>${partial
+            ? '已填写了一部分，但选择、填空、大题或某个模块还没有全部记录完，暂不计入统计。把对应部分的题目全部标记或填完后，这里会自动更新。'
+            : '回到真题页，在每年的「我的成绩」面板里标记选填对错、填写大题分数，这里会自动汇总历年成绩。'}</p>
           <button class="btn primary" type="button" data-stats-start="${subject}">去记录成绩</button>
         </div>`;
     }
@@ -1554,15 +1598,16 @@
       </section>`;
     };
 
-    const charts = chartSection('题型趋势', TYPE_SERIES, '未标记的选填和未填写的大题按 0 分计；总分只在该卷选填、大题都有记录时绘出。')
-      + chartSection('模块趋势', MODULE_SERIES, '按题目的考点模块归类；数二不考概率，因此不会出现在图里。');
+    const charts = chartSection('题型趋势', TYPE_SERIES, '只有该题型全部题目都记录后才绘出；未填完的选填和大题不参与走势。')
+      + chartSection('模块趋势', MODULE_SERIES, '只有该模块全部题目都记录后才绘出；数二不考概率，因此不会出现在图里。');
 
     const detail = `<section class="sumsec">
         <div class="sumsec-head"><span class="sumsec-title">逐年明细</span><span class="sumsec-avg">按年份倒序</span></div>
-        <p class="sumnote">每一行都是「已得 / 满分」。选填和大题优先看；总分需要两部分都有记录才计算。</p>
+        <p class="sumnote">只显示已经填写完整的题型和模块，未填完的部分不计入统计；每一行都是「已得 / 满分」。</p>
       </section>` + rows.map(yearCardHTML).join('');
 
-    return `${header}<div class="stats">${cards}</div>${charts}${detail}`;
+    return `${header}<div class="stats">${cards}</div>
+      <p class="sumnote">均分按 2021 年改革前后分开统计；每个分段只计入对应部分题目已全部记录的成绩，未填完的不参与统计。总分满分始终是 150 分，因此另外保留了全部年份的均分。</p>${charts}${detail}`;
   }
 
   /* ── 错题本导出 PDF：另建一份只用于打印的版式，交给浏览器「存储为 PDF」 ── */
